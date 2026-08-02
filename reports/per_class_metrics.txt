@@ -1,0 +1,20 @@
+              precision    recall  f1-score   support
+
+           0     0.9194    0.9483    0.9337     13950
+           1     0.9703    0.9531    0.9616     24701
+
+    accuracy                         0.9514     38651
+   macro avg     0.9449    0.9507    0.9476     38651
+weighted avg     0.9519    0.9514    0.9515     38651
+
+        family  records  attack_records  detected_as_attack  detection_rate  false_positive_rate
+        Normal    13950               0                   0        0.000000             0.051685
+       Generic     8817            8817                8814        0.999660             0.000000
+      Exploits     6647            6647                6578        0.989619             0.000000
+       Fuzzers     3617            3617                2603        0.719657             0.000000
+           DoS     2489            2489                2477        0.995179             0.000000
+Reconnaissance     2130            2130                2126        0.998122             0.000000
+      Analysis      413             413                 363        0.878935             0.000000
+      Backdoor      340             340                 339        0.997059             0.000000
+     Shellcode      214             214                 208        0.971963             0.000000
+         Worms       34              34                  34        1.000000             0.000000

@@ -1,0 +1,15 @@
+{
+  "best_params": {
+    "max_depth": null,
+    "min_samples_split": 5,
+    "n_estimators": 100
+  },
+  "best_cv_f1_macro": 0.9447172786936929,
+  "val_accuracy": 0.9509715143204575,
+  "val_f1_macro": 0.9471890059615735,
+  "test_accuracy": 0.9513596025976042,
+  "test_f1_macro": 0.9476312149124453,
+  "class_weight": null,
+  "ablation_drop_borderline": false,
+  "refit_on_current_pipeline": true
+}

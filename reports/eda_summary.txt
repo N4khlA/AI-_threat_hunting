@@ -1,0 +1,10 @@
+======================================================================
+UNSW-NB15 EDA SUMMARY
+======================================================================
+records: 257,673   features: 49
+feature kinds: {'numeric': 45, 'categorical': 4}
+total missing values: 1,546,038
+
+class distribution (binary Label):
+  0: 93,000 (36.09%)
+  1: 164,673 (63.91%)

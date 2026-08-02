@@ -1,0 +1,28 @@
+{
+  "val_loss": 0.05807049572467804,
+  "best_epoch": 25,
+  "test": {
+    "accuracy": 0.98049851478755,
+    "f1": 0.9851946269242082,
+    "auc": 0.9980043108845601
+  },
+  "window": 10,
+  "stride": 5,
+  "maxlen": 10,
+  "label_mode": "any",
+  "group": [
+    "proto",
+    "service"
+  ],
+  "n_windows": 51617,
+  "window_label_dist": {
+    "normal": 17574,
+    "attack": 34043
+  },
+  "units": 64,
+  "layers": 2,
+  "dropout": 0.4,
+  "epochs": 25,
+  "batch_size": 256,
+  "seed": 42
+}
