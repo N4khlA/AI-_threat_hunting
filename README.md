@@ -48,6 +48,37 @@ pip install -r requirements.txt
 Everything below assumes the venv is active (or prefix commands with
 `.\.venv\Scripts\python.exe`).
 
+## Reproducing this project
+
+The repo deliberately does **not** ship generated artifacts:
+`data/raw/`, `data/processed/`, `models/` and `reports/*.sqlite` are
+gitignored. Clone it and regenerate everything locally, in order:
+
+```powershell
+# 1. dataset -> data/raw/
+python src/data/download_dataset.py --combine
+
+# 2. splits, scaler, pipeline -> data/processed/, models/
+python src/features/preprocess.py
+
+# 3. Random Forest -> models/random_forest_best.joblib (full grid ~40 min)
+python src/models/random_forest.py
+
+# 4. LSTM -> models/lstm_best.keras (~2 min CPU)
+python src/models/lstm_model.py
+```
+
+Then regenerate the reports and verify with the tests:
+
+```powershell
+python src/evaluation/per_class_metrics.py
+python src/evaluation/evaluate.py
+python -m pytest tests/ -q   # 49 tests
+```
+
+These four commands are exactly the pipeline described in detail below,
+and every numbered step is idempotent and deterministic (seeded).
+
 ## Pipeline (run in order)
 
 ```powershell
