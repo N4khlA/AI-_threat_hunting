@@ -157,9 +157,7 @@ def download_split(split: str) -> Path | None:
     for variant, url in MIRRORS[split]:
         if not _download(url, destination):
             continue
-        if variant == "canonical_lower":
-            normalize_lower(destination)
-        elif variant == "cleaned":
+        if variant == "cleaned":
             normalize_cleaned(destination)
         if validate(destination, spec["rows"], variant):
             return destination
