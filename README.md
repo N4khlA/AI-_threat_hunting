@@ -265,3 +265,7 @@ closes the retraining loop).
 Dataset: N. Moustafa and J. Slay, "UNSW-NB15: A comprehensive data set
 for network intrusion detection systems," 2015 Military Communications
 and Information Systems Conference (MilCIS), 2015.
+
+## Author
+
+Built by **Guerfi Ahmed Yacine**, a cyber security engineering student at ESI Sidi Bel Abbès. Portfolio: [n4khla.github.io](https://n4khla.github.io) · [LinkedIn](https://www.linkedin.com/in/guerfi-ahmed-yacine-6831b32b8/)
