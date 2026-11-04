@@ -17,7 +17,7 @@ Response of /predict:
 
     ``p_attack`` is the Random Forest's attack probability; ``prediction``
     is ``p_attack >= threshold``, where the threshold was chosen on the
-    validation split for FPR <= 1% (``reports/random_forest_results.json``).
+    validation split for FPR <= 1% (pinned in ``models/operating_point.json``).
     ``alert`` (attacks only) carries severity, the family classifier's
     guess, the ATT&CK mapping, the features that drove the score and a
     triage note - see ``src/soc/alerts.py``.
@@ -37,7 +37,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
-import joblib
 import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -54,7 +53,7 @@ from src.models.lstm_model import (  # noqa: E402
     transform_flows,
     windows_to_sequences,
 )
-from src.models.manifest import verify_manifest  # noqa: E402
+from src.models.manifest import load_verified_pickle, verify_manifest  # noqa: E402
 from src.serving.prediction_log import (  # noqa: E402
     init_db,
     log_prediction,
@@ -79,10 +78,6 @@ FAMILIES = ("Analysis", "Backdoor", "DoS", "Exploits", "Fuzzers", "Generic",
 
 def models_dir() -> Path:
     return Path(os.environ.get("IDS_MODELS_DIR", PROJECT_ROOT / "models"))
-
-
-def reports_dir() -> Path:
-    return Path(os.environ.get("IDS_REPORTS_DIR", PROJECT_ROOT / "reports"))
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +189,7 @@ class Feedback(BaseModel):
 # ---------------------------------------------------------------------------
 REQUIRED = ["random_forest_best.joblib", "preprocess_pipeline.joblib",
             "preprocess_metadata.json"]
-OPTIONAL = ["family_rf.joblib", "lstm_best.keras"]
+OPTIONAL = ["family_rf.joblib", "lstm_best.keras", "operating_point.json"]
 
 
 def _load_artifacts() -> dict:
@@ -203,15 +198,16 @@ def _load_artifacts() -> dict:
     missing = [n for n in REQUIRED if n not in present]
     if missing:
         raise RuntimeError(f"model artifacts missing: {missing} - run the pipeline first")
-    # Refuse to unpickle anything whose digest is not pinned (B301: joblib
-    # is only reached after this check).
+    # Refuse to load anything whose digest is not pinned. Pickles are
+    # loaded from the exact bytes that were hashed (no TOCTOU window).
     manifest = verify_manifest(mdir, present)
     metadata = json.loads((mdir / "preprocess_metadata.json").read_text(encoding="utf-8"))
-    rf_results = reports_dir() / "random_forest_results.json"
+    # The alert threshold is security-relevant (threshold=1.0 blinds the
+    # IDS), so it lives in models/ and is pinned like any other artifact.
     threshold = 0.5
-    if rf_results.exists():
-        threshold = float(json.loads(rf_results.read_text(encoding="utf-8"))
-                          .get("operating_threshold", 0.5))
+    if "operating_point.json" in present:
+        threshold = float(json.loads((mdir / "operating_point.json")
+                                     .read_text(encoding="utf-8"))["threshold"])
     threshold = float(os.environ.get("IDS_ALERT_THRESHOLD", threshold))
     lstm = None
     if "lstm_best.keras" in present:
@@ -219,9 +215,9 @@ def _load_artifacts() -> dict:
 
         lstm = tf.keras.models.load_model(mdir / "lstm_best.keras")
     return {
-        "pipeline": joblib.load(mdir / "preprocess_pipeline.joblib"),  # nosec B301
-        "rf": joblib.load(mdir / "random_forest_best.joblib"),  # nosec B301
-        "family": (joblib.load(mdir / "family_rf.joblib")  # nosec B301
+        "pipeline": load_verified_pickle(mdir, "preprocess_pipeline.joblib", manifest),
+        "rf": load_verified_pickle(mdir, "random_forest_best.joblib", manifest),
+        "family": (load_verified_pickle(mdir, "family_rf.joblib", manifest)
                    if "family_rf.joblib" in present else None),
         "lstm": lstm,
         "metadata": metadata,

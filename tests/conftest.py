@@ -88,6 +88,8 @@ def artifacts_dir(tmp_path_factory) -> Path:
     joblib.dump(rf, out / "random_forest_best.joblib")
     joblib.dump(family, out / "family_rf.joblib")
     lstm.save(out / "lstm_best.keras")
+    (out / "operating_point.json").write_text(json.dumps({"threshold": 0.5}),
+                                              encoding="utf-8")
     (out / "preprocess_metadata.json").write_text(json.dumps(
         {"feature_names": names, "split_protocol": "synthetic"}), encoding="utf-8")
     write_manifest(out)

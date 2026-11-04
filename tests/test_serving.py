@@ -26,7 +26,6 @@ ANALYST = {"X-API-Key": ANALYST_KEY}
 
 def _env(monkeypatch, models, tmp_path, **extra):
     monkeypatch.setenv("IDS_MODELS_DIR", str(models))
-    monkeypatch.setenv("IDS_REPORTS_DIR", str(tmp_path))
     monkeypatch.setenv("PREDICTION_LOG_PATH", str(tmp_path / "log.sqlite"))
     monkeypatch.setenv("IDS_API_KEYS", ",".join([
         f"sensor-1:sensor:{hash_key(SENSOR_KEY)}",
@@ -198,3 +197,26 @@ def test_tampered_model_refuses_to_load(artifacts_dir, tmp_path, monkeypatch):
     with pytest.raises(Exception, match="sha256"):
         with TestClient(api.app):
             pass
+
+
+def test_tampered_threshold_refuses_to_load(artifacts_dir, tmp_path, monkeypatch):
+    """Raising the alert threshold silently blinds the IDS: it is pinned too."""
+    tampered = tmp_path / "models"
+    shutil.copytree(artifacts_dir, tampered)
+    (tampered / "operating_point.json").write_text('{"threshold": 1.0}')
+    _env(monkeypatch, tampered, tmp_path)
+    with pytest.raises(Exception, match="operating_point.json"):
+        with TestClient(api.app):
+            pass
+
+
+def test_swap_after_verification_is_not_loaded(artifacts_dir, tmp_path):
+    """load_verified_pickle hashes the bytes it unpickles (no TOCTOU)."""
+    from src.models.manifest import IntegrityError, load_verified_pickle
+
+    models = tmp_path / "models"
+    shutil.copytree(artifacts_dir, models)
+    manifest = json.loads((models / "manifest.json").read_text())
+    (models / "family_rf.joblib").write_bytes(b"not the pinned bytes")
+    with pytest.raises(IntegrityError):
+        load_verified_pickle(models, "family_rf.joblib", manifest)

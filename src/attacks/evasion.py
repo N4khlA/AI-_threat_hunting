@@ -60,7 +60,7 @@ TTL_FEATURES = ["sttl", "dttl", "ct_state_ttl"]
 # the deployed RF was fitted on a DataFrame; we score column-sliced arrays
 warnings.filterwarnings("ignore", message="X does not have valid feature names")
 BENIGN_TTLS = np.array([31, 62])
-EPSILONS = (0.25, 0.5, 1.0, 2.0, 4.0)
+EPSILONS = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0)
 
 
 def _ratio(new: pd.Series, old: pd.Series) -> pd.Series:
@@ -87,7 +87,10 @@ def perturb(df: pd.DataFrame, pad, pkts, slow, ttl=None) -> pd.DataFrame:
     out["dur"] = df["dur"].astype(float) * stretch
     out["Sload"] = df["Sload"].astype(float) * _ratio(new_sbytes, sbytes) / stretch
     out["Dload"] = df["Dload"].astype(float) / stretch
-    out["smeansz"] = new_sbytes / new_spkts
+    # relative update: UNSW stores smeansz rounded, so recomputing
+    # sbytes/Spkts would perturb flows even at zero budget
+    out["smeansz"] = (df["smeansz"].astype(float) * _ratio(new_sbytes, sbytes)
+                      / (new_spkts / spkts))
     out["Sintpkt"] = df["Sintpkt"].astype(float) * stretch * spkts / new_spkts
     out["Dintpkt"] = df["Dintpkt"].astype(float) * stretch
     if ttl is not None:

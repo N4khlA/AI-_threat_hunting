@@ -96,6 +96,23 @@ def verify_manifest(models_dir: Path, required: list[str]) -> dict:
     return manifest
 
 
+def load_verified_pickle(models_dir: Path, name: str, manifest: dict):
+    """Unpickle ``name`` from the *same bytes* whose digest was checked.
+
+    Hashing a path and then loading it reads the file twice, so a swap in
+    between (TOCTOU) would bypass the pin. Read once, hash, then load.
+    """
+    import io  # noqa: PLC0415
+
+    import joblib  # noqa: PLC0415
+
+    data = (models_dir / name).read_bytes()
+    entry = manifest["files"].get(name)
+    if entry is None or not hashes_equal(hashlib.sha256(data).hexdigest(), entry["sha256"]):
+        raise IntegrityError(f"{name} does not match its pinned sha256")
+    return joblib.load(io.BytesIO(data))  # nosec B301
+
+
 def hashes_equal(a: str, b: str) -> bool:
     import hmac  # noqa: PLC0415
 

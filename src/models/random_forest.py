@@ -223,6 +223,9 @@ def main() -> None:
     (REPORTS_DIR / "random_forest_results.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8")
     print(f"[ok] results -> {REPORTS_DIR / 'random_forest_results.json'}")
+    (MODELS_DIR / "operating_point.json").write_text(json.dumps(
+        {"threshold": threshold, "rule": summary["operating_threshold_rule"],
+         "split_protocol": summary["split_protocol"]}, indent=2), encoding="utf-8")
     write_manifest(MODELS_DIR)
 
 

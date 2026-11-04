@@ -21,7 +21,8 @@ def flows() -> pd.DataFrame:
 
 def test_zero_budget_is_identity(flows):
     out = perturb(flows, 0, 0, 0)
-    for col in ("sbytes", "Spkts", "dur", "Sload", "Dload"):
+    for col in ("sbytes", "Spkts", "dur", "Sload", "Dload", "smeansz",
+                "Sintpkt", "Dintpkt", "sttl"):
         np.testing.assert_allclose(out[col], flows[col])
 
 
@@ -37,7 +38,7 @@ def test_perturbations_only_add_attacker_cost(flows):
 
 def test_derived_fields_stay_consistent(flows):
     out = perturb(flows, pad=1.0, pkts=0.0, slow=1.0)
-    np.testing.assert_allclose(out["smeansz"], out["sbytes"] / out["Spkts"])
+    np.testing.assert_allclose(out["smeansz"], flows["smeansz"] * 2)  # 2x bytes, same pkts
     # 2x bytes over 2x time -> same source load
     np.testing.assert_allclose(out["Sload"], flows["Sload"], rtol=1e-9)
     np.testing.assert_allclose(out["Dload"], flows["Dload"] / 2)
