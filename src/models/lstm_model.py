@@ -28,9 +28,16 @@ Per-flow features are transformed with the SAME fitted pipeline saved by
 models/preprocess_pipeline.joblib), so the LSTM consumes the exact same
 feature space as the Random Forest baseline.
 
-Split: stratified 70/15/15 on the *window* labels (same logic as the
-tabular pipeline). NOTE: this splits windows, not connection groups, so
-windows of the same connection pair can appear in more than one split.
+Split (``--split-mode``):
+    official (default) - windows are built *separately* inside the official
+        training file and the official testing file, so no flow can sit in
+        both a training and a test window. Validation is the last 15% of
+        every group's training timeline (windows straddling the cut are
+        dropped).
+    random - legacy: windows (stride < window, so they overlap) are split
+        at random. Overlapping windows put the same flows on both sides of
+        the split; kept only to measure how much that leak inflated the
+        score (see reports/lstm_results_random_split.json).
 
 Architecture: dense projection -> 1-2 bidirectional LSTM layers
 (64-128 units, dropout 0.3-0.5) -> sigmoid head. Early stopping on
@@ -64,6 +71,8 @@ RAW_DIR = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
 REPORTS_DIR = PROJECT_ROOT / "reports"
+
+from src.data.splits import OFFICIAL_TRAIN_ROWS  # noqa: E402
 
 DEFAULT_INPUT = RAW_DIR / "UNSW_NB15_combined.csv"
 PIPELINE_PATH = MODELS_DIR / "preprocess_pipeline.joblib"
@@ -163,6 +172,31 @@ def build_windows(
     return pd.DataFrame(records)
 
 
+def temporal_holdout(windows: pd.DataFrame, frac: float
+                     ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split windows per group at a time cut: earlier -> train, later -> holdout.
+
+    Windows that straddle the cut are dropped, so the two parts share no
+    flow (``start``/``end`` are positions inside the group's timeline).
+    """
+    length = windows.groupby("group")["end"].transform("max")
+    cut = np.floor(length * (1 - frac))
+    early = windows[windows["end"] <= cut]
+    late = windows[windows["start"] >= cut]
+    return early.reset_index(drop=True), late.reset_index(drop=True)
+
+
+def shared_flows(*parts: pd.DataFrame) -> int:
+    """Number of flow indices that appear in more than one window set."""
+    seen: set[int] = set()
+    shared = 0
+    for part in parts:
+        flows = {i for idx in part["flow_index"] for i in idx}
+        shared += len(flows & seen)
+        seen |= flows
+    return shared
+
+
 def windows_to_sequences(
     windows: pd.DataFrame, feature_matrix: np.ndarray, maxlen: int
 ) -> np.ndarray:
@@ -207,9 +241,9 @@ def transform_flows(df: pd.DataFrame, pipeline: dict, feature_names: list[str]
     encoder = pipeline["encoder"]
     if encoder["mode"] == "label":
         for col, le in encoder["objects"].items():
-            X[col] = X[col].astype(str).map(
-                lambda v: le.transform([v])[0] if v in le.classes_ else -1
-            )
+            # dict lookup == le.transform for known values, -1 for unseen
+            codes = {cls: i for i, cls in enumerate(le.classes_)}
+            X[col] = X[col].astype(str).map(codes).fillna(-1).astype(int)
     else:
         raise NotImplementedError(
             "onehot encoding mode is not supported for LSTM; re-run "
@@ -319,6 +353,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fast", action="store_true",
                         help="small units/layers/epochs + capped windows (smoke test)")
+    parser.add_argument("--split-mode", choices=["official", "random"],
+                        default="official",
+                        help="official (no shared flows) or legacy random")
+    parser.add_argument("--results-name", default="lstm_results.json",
+                        help="file name for the results JSON in reports/")
     parser.add_argument("--max-windows", type=int, default=None,
                         help="cap the number of windows built (debugging)")
     args = parser.parse_args()
@@ -337,12 +376,48 @@ def main() -> None:
 
     group_cols = detect_group_key(df, args.group)
     warn_grouping(group_cols, df)
-    windows = build_windows(df, group_cols, args.window, args.stride, args.label_mode)
-    if args.max_windows:
-        windows = windows.iloc[: args.max_windows]
+    maxlen = args.maxlen or args.window
+
+    if args.split_mode == "official":
+        n_train = OFFICIAL_TRAIN_ROWS
+        pool = build_windows(df.iloc[:n_train], group_cols, args.window,
+                             args.stride, args.label_mode)
+        w_test = build_windows(df.iloc[n_train:], group_cols, args.window,
+                               args.stride, args.label_mode)
+        w_train, w_val = temporal_holdout(pool, 0.15)
+        if args.max_windows:
+            w_train, w_val, w_test = (w.iloc[: args.max_windows]
+                                      for w in (w_train, w_val, w_test))
+        overlap = shared_flows(w_train, w_val, w_test)
+        if overlap:
+            sys.exit(f"[!] {overlap} flows shared across window splits")
+        windows = pd.concat([w_train, w_val, w_test], ignore_index=True)
+        n_tr, n_va = len(w_train), len(w_val)
+        pos_train = np.arange(n_tr)
+        pos_val = np.arange(n_tr, n_tr + n_va)
+        pos_test = np.arange(n_tr + n_va, len(windows))
+    else:
+        windows = build_windows(df, group_cols, args.window, args.stride,
+                                args.label_mode)
+        if args.max_windows:
+            windows = windows.iloc[: args.max_windows]
+        from sklearn.model_selection import train_test_split  # noqa: PLC0415
+
+        y_all = windows["label"].to_numpy()
+        positions = np.arange(len(windows))
+        pos_train, pos_tmp = train_test_split(
+            positions, test_size=0.30, stratify=y_all, random_state=args.seed)
+        pos_val, pos_test = train_test_split(
+            pos_tmp, test_size=0.50, stratify=y_all[pos_tmp],
+            random_state=args.seed)
+        overlap = shared_flows(windows.iloc[pos_train], windows.iloc[pos_test])
+        print(f"WARNING: random window split - {overlap:,} flows appear in "
+              f"both training and test windows")
+
     n_attack = int(windows["label"].sum())
     print(f"\nBuilt {len(windows):,} windows (window={args.window}, "
-          f"stride={args.stride}, label={args.label_mode})")
+          f"stride={args.stride}, label={args.label_mode}, "
+          f"split={args.split_mode})")
     print(f"Window label distribution: normal={len(windows) - n_attack:,} "
           f"({(1 - n_attack / len(windows)):.1%}), "
           f"attack={n_attack:,} ({n_attack / len(windows):.1%})")
@@ -353,18 +428,10 @@ def main() -> None:
     feature_matrix = transform_flows(df, pipeline, feature_names)
     print(f"Feature vectors: {feature_matrix.shape[1]} dims (per flow)")
 
-    maxlen = args.maxlen or args.window
     X = windows_to_sequences(windows, feature_matrix, maxlen)
     y = windows["label"].to_numpy()
-
-    from sklearn.model_selection import train_test_split  # noqa: PLC0415
-
-    positions = np.arange(len(X))
-    pos_train, pos_tmp, y_train, y_tmp = train_test_split(
-        positions, y, test_size=0.30, stratify=y, random_state=args.seed)
-    pos_val, pos_test, y_val, y_test = train_test_split(
-        pos_tmp, y_tmp, test_size=0.50, stratify=y_tmp, random_state=args.seed)
     X_train, X_val, X_test = X[pos_train], X[pos_val], X[pos_test]
+    y_train, y_val, y_test = y[pos_train], y[pos_val], y[pos_test]
     for name, y_part in (("train", y_train), ("val", y_val), ("test", y_test)):
         print(f"  {name}: {len(y_part):,} windows, "
               f"attack {y_part.mean():.1%}")
@@ -372,22 +439,29 @@ def main() -> None:
     # Persist the held-out window test set (features, labels, and the raw
     # flow positions each window covers) so src/evaluation/evaluate.py can
     # align LSTM window predictions with per-flow Random Forest predictions.
+    # The legacy random split is an ablation only: never let it overwrite
+    # the served model or the aligned-evaluation test set.
+    model_out = MODEL_OUT if args.split_mode == "official" else (
+        MODELS_DIR / "ablations" / "lstm_random_split.keras")
+    model_out.parent.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        PROCESSED_DIR / "lstm_test.npz",
-        X_test=X_test, y_test=y_test,
-        flow_indices=np.array(windows.iloc[pos_test]["flow_index"], dtype=object),
-    )
-    print(f"[ok] window test set -> {PROCESSED_DIR / 'lstm_test.npz'} "
-          f"({len(y_test):,} windows)")
+    if args.split_mode == "official":
+        np.savez(
+            PROCESSED_DIR / "lstm_test.npz",
+            X_test=X_test, y_test=y_test,
+            flow_indices=np.array(windows.iloc[pos_test]["flow_index"],
+                                  dtype=object),
+        )
+        print(f"[ok] window test set -> {PROCESSED_DIR / 'lstm_test.npz'} "
+              f"({len(y_test):,} windows)")
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     model, history = train_model(
         X_train, y_train, X_val, y_val, args.units, args.layers, args.dropout,
         args.epochs, args.batch_size, args.patience, args.learning_rate,
-        args.seed, MODEL_OUT,
+        args.seed, model_out,
     )
-    print(f"[ok] best model -> {MODEL_OUT}")
+    print(f"[ok] best model -> {model_out}")
 
     best_epoch = int(np.argmin(history.history["val_loss"])) + 1
     best_val_loss = float(np.min(history.history["val_loss"]))
@@ -400,6 +474,7 @@ def main() -> None:
     results.update({
         "window": args.window, "stride": args.stride, "maxlen": maxlen,
         "label_mode": args.label_mode, "group": group_cols,
+        "split_mode": args.split_mode, "shared_flows_across_splits": int(overlap),
         "n_windows": int(len(windows)),
         "window_label_dist": {
             "normal": int(len(windows) - n_attack), "attack": n_attack},
@@ -408,9 +483,13 @@ def main() -> None:
         "seed": args.seed,
     })
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    (REPORTS_DIR / "lstm_results.json").write_text(
+    (REPORTS_DIR / args.results_name).write_text(
         json.dumps(results, indent=2), encoding="utf-8")
-    print(f"[ok] results -> {REPORTS_DIR / 'lstm_results.json'}")
+    print(f"[ok] results -> {REPORTS_DIR / args.results_name}")
+    if args.split_mode == "official":
+        from src.models.manifest import write_manifest  # noqa: PLC0415
+
+        write_manifest(MODELS_DIR)
 
 
 if __name__ == "__main__":

@@ -11,16 +11,22 @@ predictions
     ts              unix epoch seconds (UTC)
     model           'rf' (per-flow) or 'lstm' (per-window)
     prediction      0/1 binary prediction
-    confidence      [0, 1] model confidence
-    true_label      0/1 ground truth when the request carried a label
-    predicted_family  top predicted attack family (rf rows)
-    true_family     ground-truth attack family when available
+    confidence      [0, 1] max(p_attack, 1 - p_attack) (dashboard)
+    p_attack        [0, 1] the model's attack probability
+    true_label      0/1 ground truth - written ONLY by record_feedback()
+    predicted_family  family classifier's top guess (rf attack rows)
+    true_family     analyst-confirmed attack family
     n_flows         flows covered by this prediction (1 for rf)
-    record_json     the raw flow record as JSON (rf rows only)
+    record_json     the validated flow record as JSON (rf rows only)
+    sensor          key name of the sensor that submitted the flow
+    label_source    'analyst' when a label came through /feedback
+    labeled_by      key name of the analyst (audit trail)
+    labeled_at      unix epoch seconds of the feedback
 
-The dashboard reads this table for live monitoring; ``retrain.py`` uses
-``record_json`` + labels as fresh training material (with exact-duplicate
-deduplication against the base dataset).
+Labels never come from the scoring request: the old API took ``Label``
+from the sensor payload, which let any caller poison retraining. The
+dashboard reads this table for live monitoring; ``retrain.py`` uses
+``record_json`` + analyst labels as fresh training material.
 """
 
 from __future__ import annotations
@@ -43,10 +49,19 @@ CREATE TABLE IF NOT EXISTS predictions (
     predicted_family TEXT,
     true_family TEXT,
     n_flows INTEGER NOT NULL DEFAULT 1,
-    record_json TEXT
+    record_json TEXT,
+    p_attack REAL,
+    sensor TEXT,
+    label_source TEXT,
+    labeled_by TEXT,
+    labeled_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_ts ON predictions(ts);
 """
+
+# Columns added after v1; migrated in place on older log files.
+ADDED_COLUMNS = {"p_attack": "REAL", "sensor": "TEXT", "label_source": "TEXT",
+                 "labeled_by": "TEXT", "labeled_at": "REAL"}
 
 
 def log_db_path() -> Path:
@@ -61,45 +76,76 @@ def init_db(path: Path | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA)
+        have = {row[1] for row in conn.execute("PRAGMA table_info(predictions)")}
+        for col, kind in ADDED_COLUMNS.items():
+            if col not in have:  # identifiers come from the constant above
+                conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} {kind}")
     return path
 
 
 def log_prediction(
     model: str,
     prediction: int,
-    confidence: float,
-    true_label: int | None = None,
+    p_attack: float,
     predicted_family: str | None = None,
-    true_family: str | None = None,
     n_flows: int = 1,
     record_json: str | None = None,
+    sensor: str | None = None,
     ts: float | None = None,
     path: Path | None = None,
-) -> None:
-    """Append one prediction row. Opens its own connection (thread-safe)."""
+) -> int:
+    """Append one prediction row; return its id (0 if logging failed)."""
     if ts is None:
         import time
 
         ts = time.time()
     path = path or log_db_path()
+    confidence = max(p_attack, 1.0 - p_attack)
     try:
         with sqlite3.connect(path) as conn:
-            conn.execute(
+            cur = conn.execute(
                 """INSERT INTO predictions
-                   (ts, model, prediction, confidence, true_label,
-                    predicted_family, true_family, n_flows, record_json)
+                   (ts, model, prediction, confidence, p_attack,
+                    predicted_family, n_flows, record_json, sensor)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (ts, model, int(prediction), float(confidence),
-                 true_label, predicted_family, true_family,
-                 int(n_flows), record_json),
+                (ts, model, int(prediction), float(confidence), float(p_attack),
+                 predicted_family, int(n_flows), record_json, sensor),
             )
+            return int(cur.lastrowid)
     except sqlite3.Error as exc:  # logging must never break inference
         print(f"[prediction_log] WARNING: could not log prediction: {exc}")
+        return 0
 
 
-def load_predictions(path: Path | None = None) -> list[tuple]:
+def record_feedback(prediction_id: int, label: int, family: str | None,
+                    analyst: str, path: Path | None = None) -> bool:
+    """Attach an analyst verdict to a logged prediction; False if unknown id."""
+    import time
+
+    path = path or log_db_path()
+    with sqlite3.connect(path) as conn:
+        cur = conn.execute(
+            """UPDATE predictions
+                  SET true_label = ?, true_family = ?, label_source = 'analyst',
+                      labeled_by = ?, labeled_at = ?
+                WHERE id = ?""",
+            (int(label), family, analyst, time.time(), int(prediction_id)))
+        return cur.rowcount == 1
+
+
+SELECT_BASIC = ("SELECT ts, model, prediction, confidence, true_label,"
+                " predicted_family, true_family, n_flows, record_json"
+                " FROM predictions ORDER BY ts")
+SELECT_EXTENDED = ("SELECT ts, model, prediction, confidence, true_label,"
+                   " predicted_family, true_family, n_flows, record_json,"
+                   " p_attack, label_source, labeled_by"
+                   " FROM predictions ORDER BY ts")
+
+
+def load_predictions(path: Path | None = None, extended: bool = False) -> list[tuple]:
     """All prediction rows as (ts, model, prediction, confidence,
-    true_label, predicted_family, true_family, n_flows, record_json)."""
+    true_label, predicted_family, true_family, n_flows, record_json)
+    [+ (p_attack, label_source, labeled_by) when ``extended``]."""
     path = path or log_db_path()
     if not path.exists():
         return []
@@ -107,9 +153,7 @@ def load_predictions(path: Path | None = None) -> list[tuple]:
         with sqlite3.connect(path) as conn:
             conn.row_factory = sqlite3.Row
             return [tuple(r) for r in conn.execute(
-                "SELECT ts, model, prediction, confidence, true_label,"
-                "       predicted_family, true_family, n_flows, record_json"
-                "  FROM predictions ORDER BY ts")]
+                SELECT_EXTENDED if extended else SELECT_BASIC)]
     except sqlite3.Error as exc:
         print(f"[prediction_log] WARNING: could not read log: {exc}")
         return []

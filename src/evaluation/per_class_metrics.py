@@ -31,6 +31,8 @@ from sklearn.metrics import classification_report
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.models.hardening import served_features  # noqa: E402
+
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
 REPORTS_DIR = PROJECT_ROOT / "reports"
@@ -84,6 +86,7 @@ def main() -> None:
     args = parser.parse_args()
 
     X_test, y_test = load_test_data(args.processed)
+    X_test = X_test[served_features(Path(args.model).parent, X_test.columns.tolist())]
     pred = pd.Series(joblib.load(args.model).predict(X_test), index=y_test.index)
 
     print("\n" + "=" * 66)

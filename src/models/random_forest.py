@@ -11,6 +11,11 @@ grid search over key hyperparameters, and reports:
 The ``--fast`` flag subsamples the training set and shrinks the grid so
 the pipeline can be smoke-tested quickly; omit it for the full run.
 
+By default the trained model is the *hardened* variant (no TTL features
++ adversarial training, see src/models/hardening.py); ``--baseline``
+trains the plain RF that reports/evasion.md shows is evaded by a TTL
+rewrite.
+
 Usage:
     python src/models/random_forest.py
     python src/models/random_forest.py --fast
@@ -38,6 +43,11 @@ matplotlib.use("Agg")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.evaluation.metrics import threshold_for_fpr  # noqa: E402
+from src.features.preprocess import DEFAULT_INPUT, load_raw  # noqa: E402
+from src.models.hardening import harden_training_set, model_features  # noqa: E402
+from src.models.manifest import write_manifest  # noqa: E402
 
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
@@ -149,6 +159,12 @@ def main() -> None:
                         help="subsample training data and use a small grid")
     parser.add_argument("--drop-borderline", action="store_true",
                         help="ablation: remove ct_*/content features from the splits")
+    parser.add_argument("--no-search", action="store_true",
+                        help="skip the grid search; fit the best params recorded "
+                             "in reports/random_forest_results.json")
+    parser.add_argument("--baseline", action="store_true",
+                        help="train the plain v1-style RF (all features, no "
+                             "adversarial training) instead of the hardened one")
     parser.add_argument("--cv", type=int, default=3)
     parser.add_argument("--n-jobs", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
@@ -163,9 +179,39 @@ def main() -> None:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     use_class_weight = metadata.get("use_class_weight", False)
 
-    grid = FAST_GRID if args.fast else FULL_GRID
-    model, search = grid_search(X_train, y_train, grid, use_class_weight,
-                                args.n_jobs, args.cv, args.seed)
+    # Hardened by default (src/models/hardening.py): no TTL features and
+    # adversarial copies of the training attacks. The pipeline still
+    # computes all features; the model sees `features`.
+    names = X_train.columns.tolist()
+    features = model_features(names, hardened=not args.baseline)
+    hardening = None
+    if not args.baseline:
+        raw = load_raw(DEFAULT_INPUT)
+        train_pos = pd.read_csv(PROCESSED_DIR / "train_positions.csv")["position"]
+        pipeline = joblib.load(MODELS_DIR / "preprocess_pipeline.joblib")  # nosec B301
+        X_train, y_train, hardening = harden_training_set(
+            X_train, y_train, raw.loc[train_pos], pipeline, names, args.seed)
+        print(f"[hardened] dropped {hardening['dropped_features']}, added "
+              f"{hardening['adversarial_training']['rows']:,} adversarial attack rows")
+    X_val, X_test = X_val[features], X_test[features]
+
+    results_path = REPORTS_DIR / "random_forest_results.json"
+    previous = (json.loads(results_path.read_text(encoding="utf-8"))
+                if results_path.exists() else {})
+    if args.no_search and previous.get("best_params"):
+        params = previous["best_params"]
+        print(f"[no-search] fitting recorded best params {params}")
+        model = RandomForestClassifier(
+            random_state=args.seed, n_jobs=args.n_jobs,
+            class_weight="balanced" if use_class_weight else None, **params)
+        model.fit(X_train, y_train)
+        # the recorded CV score belongs to the earlier search, not this fit
+        best_cv = None
+    else:
+        grid = FAST_GRID if args.fast else FULL_GRID
+        model, search = grid_search(X_train, y_train, grid, use_class_weight,
+                                    args.n_jobs, args.cv, args.seed)
+        best_cv = float(search.best_score_)
 
     joblib.dump(model, MODEL_PATH)
     print(f"[ok] best model -> {MODEL_PATH}")
@@ -174,25 +220,43 @@ def main() -> None:
     val_f1 = f1_score(y_val, model.predict(X_val), average="macro")
     test_acc = accuracy_score(y_test, model.predict(X_test))
     test_f1 = f1_score(y_test, model.predict(X_test), average="macro")
-    print(f"\nValidation: accuracy={val_acc:.4f}  f1_macro={val_f1:.4f}")
+    # Alert threshold for the API: picked on validation for FPR <= 1%, so
+    # the operating point is never tuned on the test split.
+    threshold = threshold_for_fpr(y_val, model.predict_proba(X_val)[:, 1], 0.01)
+    print(f"\nValidation: accuracy={val_acc:.4f}  f1_macro={val_f1:.4f}  "
+          f"threshold@FPR<=1%={threshold:.3f}")
     print(f"Test:       accuracy={test_acc:.4f}  f1_macro={test_f1:.4f}")
 
-    importances = report_importances(model, X_train.columns.tolist())
+    importances = report_importances(model, features)
     save_importance_chart(importances)
     importances.to_csv(REPORTS_DIR / "feature_importances.csv", index=False)
 
     summary = {
         "best_params": {k: (None if v is None else int(v)) for k, v in model.get_params().items()
                         if k in {"n_estimators", "max_depth", "min_samples_split"}},
-        "best_cv_f1_macro": float(search.best_score_),
+        "best_cv_f1_macro": best_cv,
+        "params_source": ("recorded grid-search params (--no-search)"
+                          if args.no_search and previous.get("best_params")
+                          else "grid search on this split"),
+        "operating_threshold": threshold,
+        "operating_threshold_rule": "lowest threshold with validation FPR <= 1%",
+        "split_protocol": metadata.get("split_protocol", "random"),
         "val_accuracy": float(val_acc), "val_f1_macro": float(val_f1),
         "test_accuracy": float(test_acc), "test_f1_macro": float(test_f1),
         "class_weight": model.class_weight,
         "ablation_drop_borderline": bool(args.drop_borderline),
+        "hardened": hardening is not None,
+        "hardening": hardening,
+        "features": features,
     }
     (REPORTS_DIR / "random_forest_results.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8")
     print(f"[ok] results -> {REPORTS_DIR / 'random_forest_results.json'}")
+    (MODELS_DIR / "operating_point.json").write_text(json.dumps(
+        {"threshold": threshold, "rule": summary["operating_threshold_rule"],
+         "split_protocol": summary["split_protocol"], "features": features,
+         "hardening": hardening}, indent=2), encoding="utf-8")
+    write_manifest(MODELS_DIR)
 
 
 if __name__ == "__main__":

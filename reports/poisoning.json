@@ -1,0 +1,87 @@
+{
+  "family": "Backdoor",
+  "train_rows": 88212,
+  "incumbent": {
+    "accuracy": 0.8159094362558882,
+    "f1_macro": 0.8135098758870831,
+    "family_recall": {
+      "Analysis": 0.9761904761904762,
+      "Backdoor": 1.0,
+      "DoS": 0.9966273187183811,
+      "Exploits": 0.9947776993648554,
+      "Fuzzers": 0.8987312572087659,
+      "Generic": 1.0,
+      "Reconnaissance": 0.9995503597122302,
+      "Shellcode": 0.9945054945054945,
+      "Worms": 1.0
+    }
+  },
+  "runs": [
+    {
+      "budget_share_of_train": 0.0,
+      "poison_rows": 0,
+      "accuracy": 0.8208289013827685,
+      "f1_macro": 0.8182452961165334,
+      "target_recall": 1.0,
+      "other_families_min_recall_delta": -0.0039215686274509665,
+      "v1_guard_accepts": true,
+      "v2_guard_accepts": true,
+      "v2_reason": "new accuracy 0.8208 beats old 0.8159 (gain +0.0049 > 0.001)"
+    },
+    {
+      "budget_share_of_train": 0.0025,
+      "poison_rows": 221,
+      "accuracy": 0.8203730436103935,
+      "f1_macro": 0.817855992128925,
+      "target_recall": 1.0,
+      "other_families_min_recall_delta": -0.0004234297812280019,
+      "v1_guard_accepts": true,
+      "v2_guard_accepts": true,
+      "v2_reason": "new accuracy 0.8204 beats old 0.8159 (gain +0.0045 > 0.001)"
+    },
+    {
+      "budget_share_of_train": 0.005,
+      "poison_rows": 441,
+      "accuracy": 0.8202590791672998,
+      "f1_macro": 0.8177387798265057,
+      "target_recall": 0.9571428571428572,
+      "other_families_min_recall_delta": -0.0027472527472527375,
+      "v1_guard_accepts": true,
+      "v2_guard_accepts": false,
+      "v2_reason": "family recall regression beyond 0.02: Backdoor 1.000->0.957 (possible targeted poisoning)"
+    },
+    {
+      "budget_share_of_train": 0.01,
+      "poison_rows": 882,
+      "accuracy": 0.8195562984348883,
+      "f1_macro": 0.8169903745314766,
+      "target_recall": 0.8285714285714286,
+      "other_families_min_recall_delta": -0.0041522491349481605,
+      "v1_guard_accepts": true,
+      "v2_guard_accepts": false,
+      "v2_reason": "family recall regression beyond 0.02: Backdoor 1.000->0.829 (possible targeted poisoning)"
+    },
+    {
+      "budget_share_of_train": 0.02,
+      "poison_rows": 1764,
+      "accuracy": 0.8209618598997113,
+      "f1_macro": 0.8184142661010085,
+      "target_recall": 0.6714285714285714,
+      "other_families_min_recall_delta": -0.001183081928423535,
+      "v1_guard_accepts": true,
+      "v2_guard_accepts": false,
+      "v2_reason": "family recall regression beyond 0.02: Backdoor 1.000->0.671 (possible targeted poisoning)"
+    },
+    {
+      "budget_share_of_train": 0.05,
+      "poison_rows": 4411,
+      "accuracy": 0.8180557666008206,
+      "f1_macro": 0.8154743944818517,
+      "target_recall": 0.6142857142857143,
+      "other_families_min_recall_delta": -0.009457900807381847,
+      "v1_guard_accepts": true,
+      "v2_guard_accepts": false,
+      "v2_reason": "family recall regression beyond 0.02: Backdoor 1.000->0.614 (possible targeted poisoning)"
+    }
+  ]
+}

@@ -1,17 +1,39 @@
 {
-  "harvested_logged_rows": 40,
-  "confirmed": 40,
+  "harvested_logged_rows": 0,
+  "confirmed": 0,
   "pseudo": 0,
   "new_training_rows_after_dedupe": 0,
   "old_metrics": {
-    "accuracy": 0.9513596025976042,
-    "f1_macro": 0.9476312149124453
+    "accuracy": 0.8153206199665705,
+    "f1_macro": 0.81294836893231,
+    "family_recall": {
+      "Analysis": 0.9693877551020408,
+      "Backdoor": 1.0,
+      "DoS": 0.9991568296795953,
+      "Exploits": 0.9949188426252646,
+      "Fuzzers": 0.9003460207612457,
+      "Generic": 0.9994084590357882,
+      "Reconnaissance": 0.9995503597122302,
+      "Shellcode": 0.9917582417582418,
+      "Worms": 1.0
+    }
   },
   "new_metrics": {
-    "accuracy": 0.9513596025976042,
-    "f1_macro": 0.9476312149124453
+    "accuracy": 0.8153206199665705,
+    "f1_macro": 0.81294836893231,
+    "family_recall": {
+      "Analysis": 0.9693877551020408,
+      "Backdoor": 1.0,
+      "DoS": 0.9991568296795953,
+      "Exploits": 0.9949188426252646,
+      "Fuzzers": 0.9003460207612457,
+      "Generic": 0.9994084590357882,
+      "Reconnaissance": 0.9995503597122302,
+      "Shellcode": 0.9917582417582418,
+      "Worms": 1.0
+    }
   },
   "replace": false,
-  "reason": "new model is not better: accuracy 0.9514 -> 0.9514 (gain +0.0000, need > 0.001); F1-macro 0.9476 -> 0.9476 (gain +0.0000)",
+  "reason": "new model is not better: accuracy 0.8153 -> 0.8153 (gain +0.0000, need > 0.001); F1-macro 0.8129 -> 0.8129 (gain +0.0000)",
   "min_gain": 0.001
 }

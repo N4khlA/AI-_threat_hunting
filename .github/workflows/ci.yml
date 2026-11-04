@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install (pinned)
+        run: pip install -r requirements.lock
+      # The dataset is not in the repo: data-dependent tests skip, and the
+      # API/security tests run against synthetic artifacts (tests/conftest.py).
+      - name: Tests
+        run: python -m pytest tests -q -p no:warnings
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install "pip-audit>=2.7" "bandit>=1.7"
+      - name: Static analysis (bandit, medium+)
+        run: bandit -r src -ll
+      - name: Known-vulnerable dependencies (pip-audit, pinned set)
+        run: pip-audit -r requirements.lock --strict --progress-spinner off
