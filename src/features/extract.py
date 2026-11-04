@@ -60,9 +60,12 @@ def packet_size_stats(df: pd.DataFrame) -> pd.DataFrame:
         out["pkt_size_min"] = all_sizes.min(axis=1)
         out["pkt_size_max"] = all_sizes.max(axis=1)
         out["pkt_size_std"] = all_sizes.std(axis=1)
-    elif {"spkts", "dpkts", "sbytes", "dbytes"}.issubset(df.columns):
-        spkts = pd.to_numeric(df["spkts"], errors="coerce").replace(0, np.nan)
-        dpkts = pd.to_numeric(df["dpkts"], errors="coerce").replace(0, np.nan)
+    elif {"sbytes", "dbytes"}.issubset(df.columns) and (
+            {"spkts", "dpkts"}.issubset(df.columns) or {"Spkts", "Dpkts"}.issubset(df.columns)):
+        # canonical UNSW-NB15 capitalises Spkts/Dpkts; accept both spellings
+        sp, dp = ("spkts", "dpkts") if "spkts" in df.columns else ("Spkts", "Dpkts")
+        spkts = pd.to_numeric(df[sp], errors="coerce").replace(0, np.nan)
+        dpkts = pd.to_numeric(df[dp], errors="coerce").replace(0, np.nan)
         sbytes = pd.to_numeric(df["sbytes"], errors="coerce")
         dbytes = pd.to_numeric(df["dbytes"], errors="coerce")
         fwd_size = sbytes / spkts
@@ -135,8 +138,12 @@ def duration_features(df: pd.DataFrame) -> pd.DataFrame:
         dur = pd.to_numeric(df["dur"], errors="coerce")
         out["duration"] = dur
         out["flow_rate"] = 1.0 / (dur + SAFE_ZERO)
-    if {"total_bytes", "duration"}.issubset(out.columns):
-        out["throughput_bps"] = out["total_bytes"] / (out["duration"] + SAFE_ZERO)
+    # Computed here from the raw byte counts: extractors only see the raw
+    # frame, so reading byte_counts()' output silently produced nothing.
+    if "duration" in out and {"sbytes", "dbytes"}.issubset(df.columns):
+        total = (pd.to_numeric(df["sbytes"], errors="coerce")
+                 + pd.to_numeric(df["dbytes"], errors="coerce"))
+        out["throughput_bps"] = total / (out["duration"] + SAFE_ZERO)
     return out
 
 
@@ -239,7 +246,6 @@ def payload_entropy(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# Order matters: duration_features depends on byte_counts output.
 EXTRACTORS = [
     ("packet_size_stats", packet_size_stats),
     ("inter_arrival_stats", inter_arrival_stats),

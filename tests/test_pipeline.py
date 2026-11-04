@@ -179,3 +179,18 @@ def test_scale_standardizes(messy_df):
         assert np.allclose(Xtr[col].mean(), 0, atol=1e-9)
         assert np.allclose(Xtr[col].std(ddof=0), 1, atol=1e-9)
     assert hasattr(scaler, "mean_")
+
+
+def test_duration_features_computes_throughput(raw_flows):
+    """Regression: throughput_bps was never produced (it read another
+    extractor's output that duration_features never receives)."""
+    out = duration_features(raw_flows)
+    assert "throughput_bps" in out.columns
+    assert out["throughput_bps"].iloc[0] == pytest.approx(10_000 / (1.0 + 1e-9))
+
+
+def test_packet_size_fallback_accepts_canonical_capitalisation(raw_flows):
+    canon = raw_flows.drop(columns=["smeansz", "dmeansz"]).rename(
+        columns={"spkts": "Spkts", "dpkts": "Dpkts"})
+    out = packet_size_stats(canon)
+    assert out["pkt_size_mean"].iloc[0] == pytest.approx((100 + 900) / 2)
