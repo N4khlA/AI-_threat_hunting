@@ -2,7 +2,32 @@
 
 This project is an ML research/demo pipeline, not a production IDS. The
 models score well on held-out UNSW-NB15 traffic, but several properties
-limit what those numbers mean in the real world.
+limit what those numbers mean in the real world. Numbers below refer to
+the headline protocol (`official_novel`, see `reports/rigorous_eval.md`)
+unless stated otherwise.
+
+## 0. The original headline numbers were inflated by the split
+
+The v1 README reported RF accuracy 0.951 / macro-F1 0.948 and LSTM AUC
+0.998. Both came from a random re-split of the combined UNSW-NB15 table:
+
+* ~40% of the combined rows are exact duplicates, so many "test" flows
+  had byte-identical twins in training;
+* the official training and testing files were captured separately; a
+  random re-split hides that distribution shift;
+* the LSTM's windows overlap (stride 5 < window 10) and were split at
+  random, so the same flows sat in training *and* test windows.
+
+Re-running the same model under leakage-aware protocols
+(`src/evaluation/rigorous_eval.py`) gives macro-F1 0.948 -> 0.917
+(dedup) -> 0.862 (official split) -> **0.818** (official split, unseen
+flows only). FPR at the 0.5 threshold goes from 5% to 26.5%. The new
+numbers are the honest ones; `--split random` still reproduces the old.
+
+Related finding: a threshold chosen on validation for FPR <= 1% yields
+**5% FPR on test**. Validation comes from the training capture, test
+from another, and the operating point does not transfer. In a real
+deployment, calibrate thresholds on traffic from the network you defend.
 
 ## 1. Adversarial evasion risk (transparency cuts both ways)
 
@@ -22,21 +47,23 @@ use common ports" and drive attack flows toward the normal class:
   same input-space attack works: perturb flow features to shift window
   embeddings.
 
-Mitigations to consider: feature-difficulty hardening (drop features an
-attacker trivially controls), adversarial training / GAN-based
-augmentation, and never relying on a single ML model at the boundary.
+This is now measured rather than asserted: `src/attacks/evasion.py`
+runs a black-box, budget-constrained evasion against the deployed RF, a
+no-TTL variant and an adversarially trained variant
+(`reports/evasion.md`). Mitigations: feature-difficulty hardening (drop
+features an attacker trivially controls), adversarial training, and
+never relying on a single ML model at the boundary.
 
 ## 2. Fuzzers and Analysis evade detection (stable, real weak spots)
 
-Per-family detection recall on the held-out test set is >= 0.97 for
-Generic, Exploits, DoS, Reconnaissance, Backdoor, Shellcode and Worms,
-but two families consistently fall below 0.90 even after the RF was
-re-synced to its own pipeline: **Fuzzers (0.720)** and **Analysis
-(0.879)**. These numbers have now survived two independent fixes (the
-pipeline-desync incident in section 3, and earlier preprocessing
-leakage fixes), so they are a real property of UNSW-NB15 classifiers,
-not an artifact of a bug. Do not hide them: they are the most honest
-part of the evaluation.
+At the 0.5 threshold every family but one is caught >= 0.97 of the
+time, but 0.5 costs a 26.5% false-positive rate. At the deployed
+operating threshold (0.854, validation FPR <= 1%) the weak spots show:
+**Fuzzers 0.27** and **Analysis 0.80** recall, against >= 0.88 for every
+other family. The v1 random-split evaluation showed the same two
+families as weakest (0.72 / 0.88). They survived every fix, so they are
+a real property of per-flow UNSW-NB15 classifiers, not a bug. Do not
+hide them: they are the most honest part of the evaluation.
 
 Both families are instructive as adversarial-adjacent cases:
 
@@ -100,6 +127,11 @@ pipeline version that produced it. In a real deployment:
 * keep the retrain guard honest: with zero new rows it must refuse,
   bit-for-bit (this is now covered by a regression test in this repo).
 
+Implemented since: every training step writes `models/manifest.json`
+(SHA-256 of each artifact, split protocol, git commit) and the API
+refuses to start if any artifact it loads does not match
+(`src/models/manifest.py`, `tests/test_serving.py::test_tampered_model_refuses_to_load`).
+
 ## 4. Concept drift
 
 The models are static snapshots of UNSW-NB15 (2015 synthetic captures).
@@ -128,8 +160,10 @@ right tool for *known* threats: exact C2 domains, hashes, exploit
 patterns, GeoIP/ASN blocking. ML is strongest where signatures are
 weakest (novel or polymorphic behavior), but:
 
-* the model cannot name the threat - it returns a binary flag plus an
-  estimated family prior;
+* the model cannot name the threat precisely: the family classifier
+  reaches macro-F1 0.63 (DoS / Analysis / Backdoor / Shellcode are
+  routinely confused), so the ATT&CK mapping is a triage hint, not an
+  attribution;
 * false alarms on legitimate-but-rare traffic are inherent to
   unsupervised-adjacent learning and cannot be tuned away by signatures;
 * UNSW-NB15 itself is synthetic; real-world traffic differs in ways the
@@ -140,21 +174,26 @@ the ML output feeding analyst workflows (below), not auto-blocking.
 
 ## 6. From a /predict alert to SOC action
 
-The API returns `{prediction, confidence, attack_family_probs, method}`.
-A realistic SOC integration would use that payload as follows:
+The API returns `{prediction_id, prediction, p_attack, threshold,
+model_version, alert}`; `alert` (see `src/soc/alerts.py`) already
+carries severity, the family classifier's guess, the ATT&CK mapping and
+the top drivers. A realistic SOC integration would use it as follows:
 
 1. **Enrichment** - join the flow record with asset inventory, user
    identity (via NetFlow/Zeek sidecar), and reputation/GeoIP lookups;
    attach `attack_family_probs` and `method` (rf vs lstm) for context.
-2. **Severity mapping from confidence** - confidence is the model's
-   attack probability, so it maps directly to priority:
+2. **Severity mapping from P(attack)** (implemented in
+   `src/soc/alerts.py::severity`). v1 documented this table against
+   `confidence = max(p, 1-p)`, under which a *confidently benign* flow
+   would have mapped to HIGH. Severity must key off the attack
+   probability:
 
-   | confidence | prediction | suggested severity |
-   |---|---|---|
-   | 0.50-0.80 | attack | LOW - info/triage queue |
-   | 0.80-0.95 | attack | MEDIUM - ticket |
-   | >= 0.95 | attack | HIGH - immediate ticket + page |
-   | any, lstm window | attack | route to the window's constituent flows for review |
+   | p_attack | suggested severity |
+   |---|---|
+   | threshold-0.80 | LOW - info/triage queue |
+   | 0.80-0.95 | MEDIUM - ticket |
+   | >= 0.95 | HIGH - immediate ticket + page |
+   | lstm window | route to the window's constituent flows for review |
 
 3. **Ticket creation** - the alert becomes a ticket in the SIEM/SOAR
    (e.g. TheHive/Jira), with the raw flow record attached so the analyst
@@ -163,7 +202,8 @@ A realistic SOC integration would use that payload as follows:
    alert. The confirmation feeds back: confirmed attacks and dismissed
    false positives are *labels*, which (a) train the severity
    thresholds and (b) become ground truth rows in the prediction log
-   for `retrain.py --labeled-only`. This closes the loop:
+   via the analyst-only `/feedback` endpoint, the only label path
+   `retrain.py` trusts. This closes the loop:
    alerts -> labels -> better model -> fewer false alarms.
 5. **Escalation** - only confirmed high-confidence alerts should trigger
    blocking actions; everything below the review threshold stays
