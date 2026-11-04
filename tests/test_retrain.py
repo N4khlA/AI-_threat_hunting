@@ -57,13 +57,16 @@ def test_should_replace_respects_min_gain():
     assert should_replace(OLD, new, min_gain=0.0005)[0] is True
 
 
-def _log_row(true_label, confidence, prediction, family=None):
+def _log_row(true_label, confidence, prediction, family=None, source=None):
     return {
         "ts": 1.0, "model": "rf", "prediction": prediction,
         "confidence": confidence, "true_label": true_label,
         "predicted_family": family, "true_family": None,
         "n_flows": 1,
         "record_json": json.dumps({"proto": "tcp", "sbytes": 100}),
+        "p_attack": confidence if prediction == 1 else 1 - confidence,
+        "label_source": source if source else ("analyst" if true_label is not None else None),
+        "labeled_by": None,
     }
 
 
@@ -75,7 +78,8 @@ def test_apply_labels_confirmed_and_pseudo():
     ], columns=LOG_COLUMNS)
     flows, stats = apply_labels(df, min_confidence=0.95, labeled_only=False)
     assert len(flows) == 2
-    assert stats == {"confirmed": 1, "pseudo": 1, "dropped_low_confidence": 1}
+    assert stats == {"confirmed": 1, "pseudo": 1, "dropped_low_confidence": 1,
+                     "dropped_untrusted_label": 0}
     labels = sorted(int(f["Label"]) for f in flows.to_dict("records"))
     assert labels == [1, 1]
     pseudo = flows.iloc[1]
@@ -133,3 +137,34 @@ def test_dedupe_matches_nan_base_columns_despite_dtype_mismatch():
     kept = dedupe_new_rows(new, base)
     assert len(kept) == 1
     assert kept.iloc[0]["sbytes"] == 999
+
+
+def test_apply_labels_ignores_labels_not_from_an_analyst():
+    """Regression for the v1 poisoning path: a label that did not come
+    through the authenticated /feedback endpoint must never be trained on."""
+    df = pd.DataFrame([
+        _log_row(true_label=0, confidence=0.99, prediction=1, source="sensor"),
+        _log_row(true_label=0, confidence=0.99, prediction=1, source=None)
+        | {"label_source": None},
+        _log_row(true_label=1, confidence=0.99, prediction=1, family="DoS"),
+    ], columns=LOG_COLUMNS)
+    flows, stats = apply_labels(df, min_confidence=0.95, labeled_only=True)
+    assert stats["dropped_untrusted_label"] == 2
+    assert stats["confirmed"] == 1 and len(flows) == 1
+
+
+def test_guard_refuses_targeted_family_regression():
+    """Aggregate accuracy improves, but one family's recall collapses:
+    exactly what a targeted poisoning attack looks like."""
+    old = {**OLD, "family_recall": {"Backdoor": 0.95, "DoS": 0.90}}
+    new = {"accuracy": 0.9200, "f1_macro": 0.9000,
+           "family_recall": {"Backdoor": 0.40, "DoS": 0.91}}
+    replace, reason = should_replace(old, new, min_gain=0.001)
+    assert replace is False
+    assert "Backdoor" in reason and "poisoning" in reason
+
+
+def test_guard_tolerates_small_family_noise():
+    old = {**OLD, "family_recall": {"Backdoor": 0.95}}
+    new = {"accuracy": 0.9100, "f1_macro": 0.8900, "family_recall": {"Backdoor": 0.94}}
+    assert should_replace(old, new, min_gain=0.001)[0] is True

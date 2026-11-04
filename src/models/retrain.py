@@ -10,22 +10,31 @@ on the exact same held-out test set* (fixed via
 why.
 
 Label handling for the harvested rows:
-    * confirmed labels   - rows whose request carried a ground-truth
-                           ``Label`` are always used (their raw record is
-                           stored verbatim),
-    * pseudo-labels      - rows without a label are used when the model
-                           confidence >= ``--min-confidence``, with the
-                           prediction taken as the label. Pass
-                           ``--labeled-only`` to disable pseudo-labels
-                           entirely.
+    * confirmed labels   - only rows an *analyst* labelled through the
+                           authenticated ``/feedback`` endpoint
+                           (``label_source == 'analyst'``). Labels from any
+                           other origin are dropped: the v1 API took
+                           ``Label`` from the sensor payload, which was an
+                           unauthenticated training-data poisoning path
+                           (see src/attacks/poisoning.py).
+    * pseudo-labels      - OFF by default; ``--pseudo-labels`` uses rows
+                           with confidence >= ``--min-confidence`` and the
+                           prediction as the label. Self-training on its own
+                           output lets an evasion that once scored "benign
+                           with high confidence" teach the model it is
+                           benign, so keep it off unless you need it.
     * deduplication      - rows that exactly duplicate a base-dataset row
                            are dropped first (the traffic simulator replays
                            held-out test flows, which must never leak into
                            training).
 
+The guard also refuses a model whose recall on any attack family drops by
+more than ``--max-family-drop`` (default 0.02): targeted poisoning hides
+inside aggregate accuracy, so aggregate metrics alone are not a guard.
+
 Usage:
-    python src/models/retrain.py                        # pseudo-labels on
-    python src/models/retrain.py --labeled-only         # confirmed labels only
+    python src/models/retrain.py                        # analyst labels only
+    python src/models/retrain.py --pseudo-labels        # + pseudo-labels
     python src/models/retrain.py --dry-run              # evaluate, don't write
     python src/models/retrain.py --force                # replace regardless
 """
@@ -59,6 +68,8 @@ from src.features.preprocess import (  # noqa: E402
     save_artifacts,
     scale,
 )
+from src.evaluation.metrics import per_family_recall  # noqa: E402
+from src.models.manifest import write_manifest  # noqa: E402
 from src.serving.prediction_log import load_predictions  # noqa: E402
 
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
@@ -72,7 +83,8 @@ RF_RESULTS = REPORTS_DIR / "random_forest_results.json"
 METADATA_PATH = MODELS_DIR / "preprocess_metadata.json"
 
 LOG_COLUMNS = ["ts", "model", "prediction", "confidence", "true_label",
-               "predicted_family", "true_family", "n_flows", "record_json"]
+               "predicted_family", "true_family", "n_flows", "record_json",
+               "p_attack", "label_source", "labeled_by"]
 
 FALLBACK_RF_PARAMS = {"n_estimators": 200, "max_depth": 25,
                       "min_samples_split": 2}
@@ -84,7 +96,7 @@ FALLBACK_RF_PARAMS = {"n_estimators": 200, "max_depth": 25,
 
 def load_logged_rows(path: Path | None = None) -> pd.DataFrame:
     """Rows from the prediction log that carry a raw flow record (rf rows)."""
-    rows = load_predictions(path)
+    rows = load_predictions(path, extended=True)
     if not rows:
         return pd.DataFrame(columns=LOG_COLUMNS)
     df = pd.DataFrame(rows, columns=LOG_COLUMNS)
@@ -101,10 +113,15 @@ def apply_labels(
     ``Label``/``attack_cat``. Rows that are neither confirmed nor
     confidently predicted are dropped.
     """
-    stats = {"confirmed": 0, "pseudo": 0, "dropped_low_confidence": 0}
+    stats = {"confirmed": 0, "pseudo": 0, "dropped_low_confidence": 0,
+             "dropped_untrusted_label": 0}
     flows = []
     for _, row in log_df.iterrows():
         record = json.loads(row["record_json"])
+        trusted = row.get("label_source") == "analyst"
+        if pd.notna(row["true_label"]) and not trusted:
+            stats["dropped_untrusted_label"] += 1
+            continue
         if pd.notna(row["true_label"]):
             record["Label"] = int(row["true_label"])
             if pd.notna(row["true_family"]):
@@ -153,13 +170,26 @@ def dedupe_new_rows(new_df: pd.DataFrame, base_df: pd.DataFrame) -> pd.DataFrame
 # Compare-and-replace guard (pure function -> unit-testable)
 # ---------------------------------------------------------------------------
 
-def should_replace(old: dict, new: dict, min_gain: float = 0.001) -> tuple[bool, str]:
+def should_replace(old: dict, new: dict, min_gain: float = 0.001,
+                   max_family_drop: float = 0.02) -> tuple[bool, str]:
     """Decide whether ``new`` metrics beat ``old`` on the same test set.
 
-    Metrics dicts carry ``accuracy`` and ``f1_macro``. The new model wins
-    on accuracy (beyond ``min_gain``), or on F1-macro when accuracy is
-    within ``min_gain`` of a tie.
+    Metrics dicts carry ``accuracy`` and ``f1_macro`` (and optionally
+    ``family_recall``: {family: recall}). The new model wins on accuracy
+    (beyond ``min_gain``), or on F1-macro when accuracy is within
+    ``min_gain`` of a tie - but never if any family's recall drops by
+    more than ``max_family_drop`` (targeted-poisoning tripwire).
     """
+    regressions = {
+        fam: (rec, new["family_recall"].get(fam, 0.0))
+        for fam, rec in old.get("family_recall", {}).items()
+        if "family_recall" in new
+        and rec - new["family_recall"].get(fam, 0.0) > max_family_drop
+    }
+    if regressions:
+        worst = ", ".join(f"{f} {a:.3f}->{b:.3f}" for f, (a, b) in regressions.items())
+        return False, (f"family recall regression beyond {max_family_drop}: {worst} "
+                       "(possible targeted poisoning)")
     acc_gain = new["accuracy"] - old["accuracy"]
     f1_gain = new["f1_macro"] - old["f1_macro"]
     if acc_gain > min_gain:
@@ -179,13 +209,17 @@ def should_replace(old: dict, new: dict, min_gain: float = 0.001) -> tuple[bool,
     return False, reason
 
 
-def evaluate(model, X_test: pd.DataFrame, y_test: pd.Series) -> dict:
-    """Accuracy + F1-macro of a fitted model on a (transformed) test set."""
+def evaluate(model, X_test: pd.DataFrame, y_test: pd.Series,
+             families: pd.Series | None = None) -> dict:
+    """Accuracy + F1-macro (+ per-family recall) on a transformed test set."""
     pred = model.predict(X_test)
-    return {
+    out = {
         "accuracy": float(accuracy_score(y_test, pred)),
         "f1_macro": float(f1_score(y_test, pred, average="macro")),
     }
+    if families is not None:
+        out["family_recall"] = per_family_recall(pred, families.to_numpy())
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +244,13 @@ def train_rf(X_train: pd.DataFrame, y_train: pd.Series, params: dict,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument("--pseudo-labels", action="store_true",
+                        help="also use high-confidence predictions as labels "
+                             "(off by default: self-training amplifies evasion)")
     parser.add_argument("--labeled-only", action="store_true",
-                        help="only retrain on rows with confirmed labels "
-                             "(no pseudo-labels)")
+                        help="(default; kept for backwards compatibility)")
+    parser.add_argument("--max-family-drop", type=float, default=0.02,
+                        help="refuse if any family's recall drops more than this")
     parser.add_argument("--min-confidence", type=float, default=0.95,
                         help="confidence threshold for pseudo-labels (0.95)")
     parser.add_argument("--min-gain", type=float, default=0.001,
@@ -239,10 +277,11 @@ def main() -> None:
 
     log_df = load_logged_rows()
     new_flows, stats = apply_labels(log_df, args.min_confidence,
-                                    args.labeled_only)
+                                    labeled_only=not args.pseudo_labels)
     print(f"\nHarvested {len(log_df)} logged flow predictions "
           f"({stats['confirmed']} confirmed, {stats['pseudo']} pseudo, "
-          f"{stats['dropped_low_confidence']} dropped for low confidence)")
+          f"{stats['dropped_low_confidence']} dropped for low confidence, "
+          f"{stats['dropped_untrusted_label']} dropped: label not from an analyst)")
     new_flows = dedupe_new_rows(new_flows, base)
     print(f"After deduplication against the base dataset: "
           f"{len(new_flows)} new training rows")
@@ -309,8 +348,9 @@ def main() -> None:
                          args.n_jobs, args.seed)
 
     old_model = joblib.load(MODEL_PATH)
-    old_metrics = evaluate(old_model, X_test, y_test)
-    new_metrics = evaluate(new_model, X_test, y_test)
+    test_families = attack_cat_splits.get("test")
+    old_metrics = evaluate(old_model, X_test, y_test, test_families)
+    new_metrics = evaluate(new_model, X_test, y_test, test_families)
     print(f"\nOld model on held-out test: "
           f"accuracy={old_metrics['accuracy']:.4f}  "
           f"f1_macro={old_metrics['f1_macro']:.4f}")
@@ -318,7 +358,8 @@ def main() -> None:
           f"accuracy={new_metrics['accuracy']:.4f}  "
           f"f1_macro={new_metrics['f1_macro']:.4f}")
 
-    replace, reason = should_replace(old_metrics, new_metrics, args.min_gain)
+    replace, reason = should_replace(old_metrics, new_metrics, args.min_gain,
+                                     args.max_family_drop)
     print(f"\nDecision: {'REPLACE' if replace else 'KEEP OLD'} - {reason}")
 
     result = {
@@ -361,6 +402,7 @@ def main() -> None:
         X_train, y_train, X_val, y_val, X_test, y_test,
         scaler, imputers, encoder_state, new_metadata,
     )
+    write_manifest(MODELS_DIR)
     print("\n[done] models + pipeline replaced. The API serves the new "
           "model on next restart.")
 

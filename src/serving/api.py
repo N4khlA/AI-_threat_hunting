@@ -1,136 +1,171 @@
 """FastAPI inference service for the UNSW-NB15 threat detector.
 
-Loads the trained artifacts at startup and reuses the *same* feature
-transformation functions from ``src/features/`` (no reimplementation):
+Loads the trained artifacts at startup - only after checking each one
+against the SHA-256 pins in ``models/manifest.json`` - and reuses the
+*same* feature transformation functions as training (no reimplementation).
 
-    * models/preprocess_pipeline.joblib  (imputer + encoder + scaler)
-    * models/random_forest_best.joblib   (per-flow classifier)
-    * models/lstm_best.keras             (sequence classifier)
-    * models/preprocess_metadata.json    (feature names, target info)
-
-Endpoints:
-    GET  /health                 -> service + model status
-    POST /predict                -> single raw flow record
-    POST /predict/sequence       -> list of raw flow records, scored as
-                                    windows by the LSTM (grouping via the
-                                    same fallback logic as training)
+Endpoints (roles from ``src/serving/security.py``):
+    GET  /health               public  -> liveness + whether models loaded
+    POST /predict              sensor  -> one raw flow -> verdict (+ alert)
+    POST /predict/sequence     sensor  -> up to MAX_SEQUENCE_FLOWS flows,
+                                          scored as windows by the LSTM
+    POST /feedback             analyst -> ground-truth label for a logged
+                                          prediction (the ONLY label path)
 
 Response of /predict:
-    {prediction, confidence, attack_family_probs, method}
+    {prediction_id, prediction, p_attack, threshold, model_version, alert}
 
-    attack_family_probs is an approximation: the Random Forest is a
-    binary attack/normal model, so P(family f) is decomposed as
-    P(attack) * P(family f | attack), where the conditional is the
-    attack-family prior estimated on the training split. The most
-    informative number remains `confidence` (binary attack probability).
+    ``p_attack`` is the Random Forest's attack probability; ``prediction``
+    is ``p_attack >= threshold``, where the threshold was chosen on the
+    validation split for FPR <= 1% (``reports/random_forest_results.json``).
+    ``alert`` (attacks only) carries severity, the family classifier's
+    guess, the ATT&CK mapping, the features that drove the score and a
+    triage note - see ``src/soc/alerts.py``.
 
 Run:
-    uvicorn src.serving.api:app --host 0.0.0.0 --port 8000
-    # or: python -m uvicorn src.serving.api:app --reload
+    export IDS_API_KEYS="$(python -m src.serving.security new-key ...)"   # see README
+    uvicorn src.serving.api:app --host 127.0.0.1 --port 8000
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated, Literal
 
 import joblib
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.features.preprocess import DROP_COLUMNS  # noqa: E402
 from src.models.lstm_model import (  # noqa: E402
     build_windows,
     detect_group_key,
     transform_flows,
     windows_to_sequences,
 )
+from src.models.manifest import verify_manifest  # noqa: E402
 from src.serving.prediction_log import (  # noqa: E402
     init_db,
     log_prediction,
+    record_feedback,
 )
-
-MODELS_DIR = PROJECT_ROOT / "models"
-PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
-
-RF_MODEL_PATH = MODELS_DIR / "random_forest_best.joblib"
-PIPELINE_PATH = MODELS_DIR / "preprocess_pipeline.joblib"
-METADATA_PATH = MODELS_DIR / "preprocess_metadata.json"
-LSTM_MODEL_PATH = MODELS_DIR / "lstm_best.keras"
+from src.serving.security import (  # noqa: E402
+    BodySizeLimitMiddleware,
+    Principal,
+    reload_config,
+    require,
+    security_headers,
+)
+from src.soc.alerts import build_alert  # noqa: E402
+from src.soc.explain import path_contributions, top_drivers  # noqa: E402
 
 DEFAULT_WINDOW = 10
 DEFAULT_STRIDE = 5
+MAX_SEQUENCE_FLOWS = 512
+FAMILIES = ("Analysis", "Backdoor", "DoS", "Exploits", "Fuzzers", "Generic",
+            "Reconnaissance", "Shellcode", "Worms")
+
+
+def models_dir() -> Path:
+    return Path(os.environ.get("IDS_MODELS_DIR", PROJECT_ROOT / "models"))
+
+
+def reports_dir() -> Path:
+    return Path(os.environ.get("IDS_REPORTS_DIR", PROJECT_ROOT / "reports"))
+
+
+# ---------------------------------------------------------------------------
+# Request / response schemas. Strict by design (OWASP API3/API4): unknown
+# fields are rejected (that is what closes the label-poisoning path),
+# NaN/inf are rejected, and every numeric field is bounded.
+# ---------------------------------------------------------------------------
+Count = Annotated[float, Field(ge=0, le=1e12)]
+Small = Annotated[int, Field(ge=0, le=1_000_000)]
+Ttl = Annotated[int, Field(ge=0, le=255)]
+Port = Annotated[int, Field(ge=0, le=65535)]
+Flag = Annotated[int, Field(ge=0, le=1)]
+Token = Annotated[str, Field(min_length=1, max_length=16,
+                             pattern=r"^[A-Za-z0-9_.\-]+$")]
+Ip = Annotated[str, Field(max_length=45, pattern=r"^[0-9A-Fa-f.:]+$")]
 
 
 class FlowRecord(BaseModel):
-    """A raw flow record; same fields as data/raw/. Extra fields allowed."""
+    """One raw flow record (UNSW-NB15 / Argus fields). Labels are NOT accepted."""
 
-    srcip: str | float | None = None
-    sport: int | float | None = None
-    dstip: str | float | None = None
-    dsport: int | float | None = None
-    proto: str | None = None
-    state: str | None = None
-    service: str | None = None
-    dur: float | None = None
-    sbytes: int | float | None = None
-    dbytes: int | float | None = None
-    sttl: int | None = None
-    dttl: int | None = None
-    sloss: int | None = None
-    dloss: int | None = None
-    Sload: float | None = None
-    Dload: float | None = None
-    Spkts: float | None = None
-    Dpkts: float | None = None
-    swin: int | None = None
-    dwin: int | None = None
-    stcpb: int | None = None
-    dtcpb: int | None = None
-    smeansz: int | float | None = None
-    dmeansz: int | float | None = None
-    trans_depth: int | None = None
-    res_bdy_len: int | None = None
-    Sjit: float | None = None
-    Djit: float | None = None
-    Stime: float | None = None
-    Ltime: float | None = None
-    Sintpkt: float | None = None
-    Dintpkt: float | None = None
-    tcprtt: float | None = None
-    synack: float | None = None
-    ackdat: float | None = None
-    is_sm_ips_ports: int | None = None
-    ct_state_ttl: int | None = None
-    ct_flw_http_mthd: int | None = None
-    is_ftp_login: int | None = None
-    ct_ftp_cmd: int | None = None
-    ct_srv_src: int | None = None
-    ct_srv_dst: int | None = None
-    ct_dst_ltm: int | None = None
-    ct_src_ltm: int | None = None
-    ct_src_dport_ltm: int | None = None
-    ct_dst_sport_ltm: int | None = None
-    ct_dst_src_ltm: int | None = None
-    attack_cat: str | None = Field(default=None, exclude=True)
-    Label: int | None = Field(default=None, exclude=True)
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    model_config = {"extra": "allow"}
+    srcip: Ip | None = None
+    sport: Port | None = None
+    dstip: Ip | None = None
+    dsport: Port | None = None
+    proto: Token | None = None
+    state: Token | None = None
+    service: Token | None = None
+    dur: Count | None = None
+    sbytes: Count | None = None
+    dbytes: Count | None = None
+    sttl: Ttl | None = None
+    dttl: Ttl | None = None
+    sloss: Count | None = None
+    dloss: Count | None = None
+    Sload: Count | None = None
+    Dload: Count | None = None
+    Spkts: Count | None = None
+    Dpkts: Count | None = None
+    swin: Port | None = None
+    dwin: Port | None = None
+    stcpb: Count | None = None
+    dtcpb: Count | None = None
+    smeansz: Count | None = None
+    dmeansz: Count | None = None
+    trans_depth: Small | None = None
+    res_bdy_len: Count | None = None
+    Sjit: Count | None = None
+    Djit: Count | None = None
+    Stime: Count | None = None
+    Ltime: Count | None = None
+    Sintpkt: Count | None = None
+    Dintpkt: Count | None = None
+    tcprtt: Count | None = None
+    synack: Count | None = None
+    ackdat: Count | None = None
+    is_sm_ips_ports: Flag | None = None
+    ct_state_ttl: Small | None = None
+    ct_flw_http_mthd: Small | None = None
+    is_ftp_login: Small | None = None
+    ct_ftp_cmd: Small | None = None
+    ct_srv_src: Small | None = None
+    ct_srv_dst: Small | None = None
+    ct_dst_ltm: Small | None = None
+    ct_src_ltm: Small | None = None
+    ct_src_dport_ltm: Small | None = None
+    ct_dst_sport_ltm: Small | None = None
+    ct_dst_src_ltm: Small | None = None
 
 
 class PredictResponse(BaseModel):
+    prediction_id: int
     prediction: int
-    confidence: float
-    attack_family_probs: dict[str, float]
-    method: str
+    p_attack: float
+    threshold: float
+    model_version: str
+    alert: dict | None = None
+
+
+class SequenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    flows: list[FlowRecord] = Field(min_length=1, max_length=MAX_SEQUENCE_FLOWS)
 
 
 class SequenceWindow(BaseModel):
@@ -138,12 +173,8 @@ class SequenceWindow(BaseModel):
     group: str
     n_flows: int
     prediction: int
-    confidence: float
+    p_attack: float
     flow_positions: list[int]  # indices into the request's `flows` array
-
-
-class SequenceRequest(BaseModel):
-    flows: list[FlowRecord] = Field(min_length=1)
 
 
 class SequenceResponse(BaseModel):
@@ -151,35 +182,52 @@ class SequenceResponse(BaseModel):
     grouping: list[str]
 
 
+class Feedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prediction_id: int = Field(ge=1)
+    label: Literal[0, 1]
+    attack_cat: Literal[FAMILIES] | None = None  # type: ignore[valid-type]
+
+
 # ---------------------------------------------------------------------------
-# Startup: load artifacts once
+# Startup: verify then load artifacts once
 # ---------------------------------------------------------------------------
-def _load_artifacts():
-    if not RF_MODEL_PATH.exists() or not PIPELINE_PATH.exists():
-        raise RuntimeError(
-            "model artifacts missing - run preprocess + random_forest first")
-    pipeline = joblib.load(PIPELINE_PATH)
-    metadata = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
-    rf = joblib.load(RF_MODEL_PATH)
-    scaler = joblib.load(MODELS_DIR / "scaler.joblib")
+REQUIRED = ["random_forest_best.joblib", "preprocess_pipeline.joblib",
+            "preprocess_metadata.json"]
+OPTIONAL = ["family_rf.joblib", "lstm_best.keras"]
+
+
+def _load_artifacts() -> dict:
+    mdir = models_dir()
+    present = [n for n in REQUIRED + OPTIONAL if (mdir / n).exists()]
+    missing = [n for n in REQUIRED if n not in present]
+    if missing:
+        raise RuntimeError(f"model artifacts missing: {missing} - run the pipeline first")
+    # Refuse to unpickle anything whose digest is not pinned (B301: joblib
+    # is only reached after this check).
+    manifest = verify_manifest(mdir, present)
+    metadata = json.loads((mdir / "preprocess_metadata.json").read_text(encoding="utf-8"))
+    rf_results = reports_dir() / "random_forest_results.json"
+    threshold = 0.5
+    if rf_results.exists():
+        threshold = float(json.loads(rf_results.read_text(encoding="utf-8"))
+                          .get("operating_threshold", 0.5))
+    threshold = float(os.environ.get("IDS_ALERT_THRESHOLD", threshold))
     lstm = None
-    if LSTM_MODEL_PATH.exists():
-        import tensorflow as tf
+    if "lstm_best.keras" in present:
+        import tensorflow as tf  # noqa: PLC0415
 
-        lstm = tf.keras.models.load_model(LSTM_MODEL_PATH)
-    family_priors = _family_priors()
-    return {"pipeline": pipeline, "metadata": metadata, "rf": rf,
-            "scaler": scaler, "lstm": lstm, "family_priors": family_priors}
-
-
-def _family_priors() -> dict[str, float]:
-    """P(family | attack) estimated on the original (pre-SMOTE) train split."""
-    path = PROCESSED_DIR / "attack_cat_train.csv"
-    if not path.exists():
-        return {}
-    cats = pd.read_csv(path, usecols=["attack_cat"]).iloc[:, 0]
-    attacks = cats[cats != "Normal"]
-    return attacks.value_counts(normalize=True).to_dict()
+        lstm = tf.keras.models.load_model(mdir / "lstm_best.keras")
+    return {
+        "pipeline": joblib.load(mdir / "preprocess_pipeline.joblib"),  # nosec B301
+        "rf": joblib.load(mdir / "random_forest_best.joblib"),  # nosec B301
+        "family": (joblib.load(mdir / "family_rf.joblib")  # nosec B301
+                   if "family_rf.joblib" in present else None),
+        "lstm": lstm,
+        "metadata": metadata,
+        "threshold": threshold,
+        "model_version": manifest["files"]["random_forest_best.joblib"]["sha256"][:12],
+    }
 
 
 ARTIFACTS: dict | None = None
@@ -188,66 +236,93 @@ ARTIFACTS: dict | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global ARTIFACTS
+    reload_config()
     ARTIFACTS = _load_artifacts()
     init_db()
     yield
+    ARTIFACTS = None
 
 
-app = FastAPI(title="UNSW-NB15 Threat Detector", version="1.0.0",
-              lifespan=lifespan)
+docs = os.environ.get("IDS_ENABLE_DOCS") == "1"
+app = FastAPI(title="UNSW-NB15 Threat Detector", version="2.0.0", lifespan=lifespan,
+              docs_url="/docs" if docs else None, redoc_url=None,
+              openapi_url="/openapi.json" if docs else None)
+app.add_middleware(BodySizeLimitMiddleware)
+app.middleware("http")(security_headers)
 _START_TIME = time.time()
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
+    # Do not echo the offending input back: it may be non-JSON-serialisable
+    # (NaN crashed the default handler with a 500) and reflecting attacker
+    # data into responses/logs is never needed to explain a 422.
+    errors = [{"loc": list(e.get("loc", ())), "msg": e.get("msg"), "type": e.get("type")}
+              for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
+@app.exception_handler(Exception)
+async def unhandled(_: Request, exc: Exception) -> JSONResponse:
+    # Never leak stack traces or file paths to clients (OWASP API8).
+    print(f"[api] unhandled {type(exc).__name__}: {exc}", file=sys.stderr)
+    return JSONResponse(status_code=500, content={"detail": "internal error"})
 
 
 # ---------------------------------------------------------------------------
 # Prediction helpers (pure, testable)
 # ---------------------------------------------------------------------------
 
-def predict_flow(rf, pipeline: dict, feature_names: list[str],
-                 record: dict, family_priors: dict[str, float]) -> dict:
-    """Single raw flow record -> {prediction, confidence, family_probs}."""
-    df = pd.DataFrame([record])
-    for col in feature_names:
-        if col not in df.columns:
-            df[col] = np.nan
-    X = transform_flows(df, pipeline, feature_names)
-    proba = float(rf.predict_proba(X)[0, 1])
-    confidence = max(proba, 1.0 - proba)
-    family_probs = {f: proba * p for f, p in family_priors.items()}
-    return {
-        "prediction": int(proba >= 0.5),
-        "confidence": float(confidence),
-        "attack_family_probs": family_probs,
-        "method": "random_forest",
-    }
-
-
-def score_sequence(lstm, pipeline: dict, feature_names: list[str],
-                     records: list[dict], window: int, stride: int) -> dict:
-    """List of raw flows -> LSTM window predictions (reuses training logic)."""
+def _frame(records: list[dict], feature_names: list[str]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     for col in feature_names:
         if col not in df.columns:
             df[col] = np.nan
-    if "Label" not in df.columns:
-        df["Label"] = 0  # not needed for scoring; build_windows requires it
+    return df
+
+
+def score_flow(art: dict, record: dict) -> dict:
+    """Single raw flow -> p_attack, family probabilities and drivers."""
+    names = art["metadata"]["feature_names"]
+    X = pd.DataFrame(transform_flows(_frame([record], names), art["pipeline"], names),
+                     columns=names)
+    p_attack = float(art["rf"].predict_proba(X)[0, 1])
+    family_probs: dict[str, float] = {}
+    drivers: list[dict] = []
+    if p_attack >= art["threshold"]:
+        if art["family"] is not None:
+            probs = art["family"].predict_proba(X)[0]
+            family_probs = {str(c): float(p) for c, p in zip(art["family"].classes_, probs)}
+        _, contrib = path_contributions(art["rf"], X.to_numpy())
+        drivers = top_drivers(contrib[0], names, record)
+    return {"p_attack": p_attack, "family_probs": family_probs, "drivers": drivers}
+
+
+def score_sequence(lstm, pipeline: dict, feature_names: list[str],
+                   records: list[dict], window: int, stride: int) -> dict:
+    """List of raw flows -> LSTM window predictions (reuses training logic)."""
+    df = _frame(records, feature_names)
+    df["Label"] = 0  # not used for scoring; build_windows requires the column
     group_cols = detect_group_key(df)
     windows = build_windows(df, group_cols, window, stride, label_mode="any")
-    feature_matrix = transform_flows(df, pipeline, feature_names)
-    X = windows_to_sequences(windows, feature_matrix, maxlen=window)
+    X = windows_to_sequences(windows, transform_flows(df, pipeline, feature_names),
+                             maxlen=window)
     proba = lstm.predict(X, verbose=0).ravel()
-    result = []
-    for i in range(len(windows)):
-        win = windows.iloc[i]
-        confidence = float(max(proba[i], 1.0 - proba[i]))
-        result.append({
-            "window_id": int(win["window_id"]),
-            "group": win["group"],
-            "n_flows": int(win["n_flows"]),
-            "prediction": int(proba[i] >= 0.5),
-            "confidence": confidence,
-            "flow_positions": list(win["flow_index"]),
-        })
+    result = [{
+        "window_id": int(win["window_id"]),
+        "group": win["group"],
+        "n_flows": int(win["n_flows"]),
+        "prediction": int(proba[i] >= 0.5),
+        "p_attack": float(proba[i]),
+        "flow_positions": list(win["flow_index"]),
+    } for i, (_, win) in enumerate(windows.iterrows())]
     return {"windows": result, "grouping": group_cols}
+
+
+def _artifacts() -> dict:
+    if ARTIFACTS is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
+    return ARTIFACTS
 
 
 # ---------------------------------------------------------------------------
@@ -256,73 +331,54 @@ def score_sequence(lstm, pipeline: dict, feature_names: list[str],
 
 @app.get("/health")
 def health() -> dict:
-    return {
-        "status": "ok",
-        "models": {
-            "random_forest": RF_MODEL_PATH.name,
-            "lstm": LSTM_MODEL_PATH.name if ARTIFACTS["lstm"] is not None else "not loaded",
-        },
-        "uptime_seconds": round(time.time() - _START_TIME, 1),
-    }
+    # Public: liveness only. Model names/paths are not disclosed.
+    return {"status": "ok" if ARTIFACTS is not None else "loading",
+            "uptime_seconds": round(time.time() - _START_TIME, 1)}
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(record: FlowRecord) -> PredictResponse:
-    if ARTIFACTS is None:
-        raise HTTPException(status_code=503, detail="model not loaded")
-    out = predict_flow(ARTIFACTS["rf"], ARTIFACTS["pipeline"],
-                       ARTIFACTS["metadata"]["feature_names"],
-                       record.model_dump(), ARTIFACTS["family_priors"])
-    dump = record.model_dump()
-    if record.Label is not None:
-        dump["Label"] = record.Label
-    if record.attack_cat is not None:
-        dump["attack_cat"] = record.attack_cat
-    predicted_family = max(out["attack_family_probs"],
-                           key=out["attack_family_probs"].get)
-    log_prediction(
-        model="rf",
-        prediction=out["prediction"],
-        confidence=out["confidence"],
-        true_label=record.Label,
-        predicted_family=predicted_family,
-        true_family=record.attack_cat,
-        n_flows=1,
-        record_json=json.dumps(dump, default=str),
-    )
-    return PredictResponse(**out)
+def predict(record: FlowRecord,
+            who: Principal = Depends(require("sensor"))) -> PredictResponse:
+    art = _artifacts()
+    raw = record.model_dump(exclude_none=True)
+    out = score_flow(art, raw)
+    prediction = int(out["p_attack"] >= art["threshold"])
+    family = (max(out["family_probs"], key=out["family_probs"].get)
+              if out["family_probs"] else None)
+    prediction_id = log_prediction(
+        model="rf", prediction=prediction, p_attack=out["p_attack"],
+        predicted_family=family, n_flows=1, sensor=who.name,
+        record_json=json.dumps(raw))
+    alert = build_alert(prediction_id, raw, out["p_attack"], out["family_probs"],
+                        out["drivers"], art["threshold"], art["model_version"])
+    return PredictResponse(prediction_id=prediction_id, prediction=prediction,
+                           p_attack=out["p_attack"], threshold=art["threshold"],
+                           model_version=art["model_version"], alert=alert)
 
 
 @app.post("/predict/sequence", response_model=SequenceResponse)
-def predict_sequence(req: SequenceRequest) -> SequenceResponse:
-    if ARTIFACTS is None:
-        raise HTTPException(status_code=503, detail="model not loaded")
-    if ARTIFACTS["lstm"] is None:
-        raise HTTPException(status_code=503,
-                            detail="LSTM model not loaded - train it first")
-    records = [f.model_dump() for f in req.flows]
-    out = score_sequence(ARTIFACTS["lstm"], ARTIFACTS["pipeline"],
-                         ARTIFACTS["metadata"]["feature_names"],
+def predict_sequence(req: SequenceRequest,
+                     who: Principal = Depends(require("sensor"))) -> SequenceResponse:
+    art = _artifacts()
+    if art["lstm"] is None:
+        raise HTTPException(status_code=503, detail="sequence model not loaded")
+    records = [f.model_dump(exclude_none=True) for f in req.flows]
+    out = score_sequence(art["lstm"], art["pipeline"], art["metadata"]["feature_names"],
                          records, DEFAULT_WINDOW, DEFAULT_STRIDE)
-    labels = [f.Label for f in req.flows]
-    families = [f.attack_cat for f in req.flows]
     for win in out["windows"]:
-        win_labels = [labels[i] for i in win["flow_positions"]
-                      if labels[i] is not None]
-        known = len(win_labels) == len(win["flow_positions"])
-        true_label = int(any(win_labels)) if known else None
-        true_family = None
-        if known and true_label == 1:
-            true_family = next(
-                (families[i] for i in win["flow_positions"]
-                 if families[i] is not None), None)
-        log_prediction(
-            model="lstm",
-            prediction=win["prediction"],
-            confidence=win["confidence"],
-            true_label=true_label,
-            predicted_family=None,
-            true_family=true_family,
-            n_flows=win["n_flows"],
-        )
+        log_prediction(model="lstm", prediction=win["prediction"],
+                       p_attack=win["p_attack"], n_flows=win["n_flows"],
+                       sensor=who.name)
     return SequenceResponse(**out)
+
+
+@app.post("/feedback")
+def feedback(fb: Feedback, who: Principal = Depends(require("analyst"))) -> dict:
+    """Analyst verdict for a logged prediction - the only way labels enter."""
+    if fb.label == 1 and fb.attack_cat is None:
+        raise HTTPException(status_code=422, detail="attack_cat required when label=1")
+    if not record_feedback(fb.prediction_id, fb.label,
+                           fb.attack_cat if fb.label == 1 else "Normal", who.name):
+        raise HTTPException(status_code=404, detail="unknown prediction_id")
+    return {"status": "recorded", "prediction_id": fb.prediction_id,
+            "labeled_by": who.name}
