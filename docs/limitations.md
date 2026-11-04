@@ -48,22 +48,23 @@ use common ports" and drive attack flows toward the normal class:
   embeddings.
 
 This is now measured rather than asserted: `src/attacks/evasion.py`
-runs a black-box, budget-constrained evasion against the deployed RF, a
-no-TTL variant and an adversarially trained variant
+runs a black-box, budget-constrained evasion against a plainly trained
+RF, a no-TTL variant and the served hardened model
 (`reports/evasion.md`). Headline: choosing the initial TTL alone evades
-the deployed RF on 100% of detected attacks; without TTL features,
-padding/slowing still evades 21-64%; adversarial training holds it to
-<= 4% for this perturbation family. Mitigations: feature-difficulty hardening (drop
+a plainly trained RF on 100% of detected attacks; without TTL features,
+padding/slowing still evades 23-68%. The served model is therefore the
+hardened one (no TTL + adversarial training, `src/models/hardening.py`),
+which holds evasion to <= 3.3% for this perturbation family. Mitigations: feature-difficulty hardening (drop
 features an attacker trivially controls), adversarial training, and
 never relying on a single ML model at the boundary.
 
 ## 2. Fuzzers and Analysis evade detection (stable, real weak spots)
 
 At the 0.5 threshold every family but one is caught >= 0.97 of the
-time, but 0.5 costs a 26.5% false-positive rate. At the deployed
-operating threshold (0.854, validation FPR <= 1%) the weak spots show:
-**Fuzzers 0.27** and **Analysis 0.80** recall, against >= 0.88 for every
-other family. The v1 random-split evaluation showed the same two
+time, but 0.5 costs a ~27% false-positive rate. At the operating
+threshold (validation FPR <= 1%) the weak spots show: **Fuzzers ~0.23**
+and **Analysis ~0.79** recall for the hardened served recipe (0.27 /
+0.80 for the plain RF), against >= 0.88 for every other family. The v1 random-split evaluation showed the same two
 families as weakest (0.72 / 0.88). They survived every fix, so they are
 a real property of per-flow UNSW-NB15 classifiers, not a bug. Do not
 hide them: they are the most honest part of the evaluation.

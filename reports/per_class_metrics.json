@@ -1,5 +1,5 @@
 {
-  "classification_report": "              precision    recall  f1-score   support\n\n           0     0.9797    0.7350    0.8399     33666\n           1     0.6743    0.9730    0.7966     18982\n\n    accuracy                         0.8208     52648\n   macro avg     0.8270    0.8540    0.8182     52648\nweighted avg     0.8696    0.8208    0.8243     52648\n",
+  "classification_report": "              precision    recall  f1-score   support\n\n           0     0.9806    0.7256    0.8340     33666\n           1     0.6669    0.9745    0.7919     18982\n\n    accuracy                         0.8153     52648\n   macro avg     0.8237    0.8500    0.8129     52648\nweighted avg     0.8675    0.8153    0.8188     52648\n",
   "per_family": [
     {
       "family": "Normal",
@@ -7,30 +7,30 @@
       "attack_records": 0,
       "detected_as_attack": 0,
       "detection_rate": 0.0,
-      "false_positive_rate": 0.2649557416978554
+      "false_positive_rate": 0.27443117685498725
     },
     {
       "family": "Exploits",
       "records": 7085,
       "attack_records": 7085,
-      "detected_as_attack": 7043,
-      "detection_rate": 0.9940719830628088,
+      "detected_as_attack": 7049,
+      "detection_rate": 0.9949188426252646,
       "false_positive_rate": 0.0
     },
     {
       "family": "Fuzzers",
       "records": 4335,
       "attack_records": 4335,
-      "detected_as_attack": 3879,
-      "detection_rate": 0.8948096885813149,
+      "detected_as_attack": 3903,
+      "detection_rate": 0.9003460207612457,
       "false_positive_rate": 0.0
     },
     {
       "family": "Generic",
       "records": 3381,
       "attack_records": 3381,
-      "detected_as_attack": 3380,
-      "detection_rate": 0.9997042295178941,
+      "detected_as_attack": 3379,
+      "detection_rate": 0.9994084590357882,
       "false_positive_rate": 0.0
     },
     {
@@ -45,8 +45,8 @@
       "family": "DoS",
       "records": 1186,
       "attack_records": 1186,
-      "detected_as_attack": 1183,
-      "detection_rate": 0.9974704890387859,
+      "detected_as_attack": 1185,
+      "detection_rate": 0.9991568296795953,
       "false_positive_rate": 0.0
     },
     {
@@ -61,8 +61,8 @@
       "family": "Analysis",
       "records": 294,
       "attack_records": 294,
-      "detected_as_attack": 287,
-      "detection_rate": 0.9761904761904762,
+      "detected_as_attack": 285,
+      "detection_rate": 0.9693877551020408,
       "false_positive_rate": 0.0
     },
     {

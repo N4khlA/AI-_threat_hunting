@@ -20,11 +20,13 @@ with a script or a test.
 >   poisoning path. **1,764 poisoned rows (2% of train) cut Backdoor recall
 >   from 1.00 to 0.67 while overall accuracy went *up*.** The v1 retrain guard
 >   accepted that model. The fixed pipeline refuses it.
-> * Evasion: an attacker who only picks their **initial TTL** evades the
->   deployed Random Forest **100%** of the time. Volume and timing changes
->   alone evade it 21–60% of the time. Adversarial training brings that to
->   **≤ 4%** for 0.004 F1 (robust to *this* perturbation family only).
-> * 105 tests, CI with `bandit` + `pip-audit`, a threat model mapped to
+> * Evasion: an attacker who only picks their **initial TTL** evaded the
+>   plainly trained Random Forest **100%** of the time, and padding or
+>   slowing down evaded it 21–60% of the time. The **served model is now
+>   hardened** (no TTL features + adversarial training): **≤ 3.3%** evasion
+>   at every budget tested, for 0.005 macro-F1. It is robust to *this*
+>   perturbation family only.
+> * 108 tests, CI with `bandit` + `pip-audit`, a threat model mapped to
 >   STRIDE / MITRE ATLAS / OWASP API Top 10.
 
 ## Contents
@@ -53,10 +55,13 @@ Same Random Forest, same hyperparameters, only the split changes
 | `official` | official train file → official test file | 82,332 | 0.862 [0.860, 0.865] | 0.981 | 27.5% |
 | **`official_novel`** | **official split, test = flows never seen in training** | **52,648** | **0.818 [0.815, 0.822]** | **0.963** | **26.5%** |
 | `official_novel_no_ttl` | ... without the TTL testbed-artifact features | 52,648 | 0.816 [0.813, 0.819] | 0.961 | 26.8% |
+| **`official_novel_hardened`** | **the served recipe: no TTL + adversarial training** | **52,648** | **0.813 [0.810, 0.817]** | **0.960** | **27.5%** |
 
 `official_novel` is the protocol the service ships with
 (`src/data/splits.py`; `tests/test_rigor.py` proves no test flow has a
-twin in training).
+twin in training). The served model is the hardened recipe in the last
+row: it gives up 0.005 F1 against the plain model in exchange for the
+evasion robustness in §2.
 
 Three things this table teaches:
 
@@ -69,27 +74,32 @@ Three things this table teaches:
   class separation. Keeping them is not free, though: they make the
   model trivially evadable (§2, attack 2).
 * **Thresholds don't transfer across captures.** A threshold set on
-  validation for FPR ≤ 1% (0.854) gives **5.0% FPR** on test.
+  validation for FPR ≤ 1% gives **4–5% FPR** on test.
 
 ### What that means for a SOC
 
-At the deployed threshold (0.854): TPR 0.787, FPR 0.050. At 1M flows/day:
+Hardened recipe at its validation-chosen threshold (0.880): TPR 0.765,
+FPR 0.043. At 1M flows/day:
 
 | attack prevalence | alert precision | true alerts/day | false alerts/day |
 |---:|---:|---:|---:|
-| 1% | 13.7% | 7,873 | 49,697 |
-| 0.1% | 1.5% | 787 | 50,149 |
+| 1% | 15.2% | 7,654 | 42,551 |
+| 0.1% | 1.8% | 765 | 42,938 |
+
+(The served artifact, fitted separately by `random_forest.py`, lands at
+threshold 0.870 with TPR 0.778 / FPR 0.050, within about a point; the
+difference comes from fitting on CSV round-tripped versus in-memory floats.)
 
 That's the base-rate fallacy in numbers: a model with 0.96 AUC still
-produces ~50k false alerts a day. This is why the service emits
+produces ~43k false alerts a day. This is why the service emits
 *explained*, severity-ranked alerts for human triage and never
 auto-blocks (see [`docs/limitations.md`](docs/limitations.md) §6).
 
-### Per-family recall (deployed threshold)
+### Per-family recall (hardened recipe at its operating threshold)
 
-| Generic | Recon | Exploits | Worms | DoS | Backdoor | Shellcode | Analysis | **Fuzzers** |
+| Generic | Recon | Worms | Exploits | Backdoor | DoS | Shellcode | Analysis | **Fuzzers** |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0.976 | 0.957 | 0.934 | 0.907 | 0.901 | 0.900 | 0.885 | 0.796 | **0.271** |
+| 0.964 | 0.942 | 0.930 | 0.916 | 0.886 | 0.886 | 0.882 | 0.789 | **0.226** |
 
 Fuzzers are built to look like benign traffic, and per-flow statistics
 can't see them. This weak spot survived every fix (§8).
@@ -104,8 +114,8 @@ can't see them. This weak spot survived every fix (§8).
 Same code and hyperparameters: `src/models/lstm_model.py --split-mode random|official`.
 The v1 random split put 54,041 flows into both training and test windows
 (stride 5 < window 10). On the 10,544 flows both models score, the
-honest LSTM and the RF are **tied**: accuracy 0.819 vs 0.818, McNemar
-p = 0.84 ([`reports/model_comparison.md`](reports/model_comparison.md)).
+honest LSTM and the served RF are **statistically tied**: accuracy 0.819
+vs 0.815, McNemar p = 0.27 (0.819 vs 0.818, p = 0.84 against the plain RF) ([`reports/model_comparison.md`](reports/model_comparison.md)).
 v1's "LSTM is stronger" came from the leak. With the cleaned dataset's
 weak grouping key (no IPs), there is little sequence signal to learn.
 
@@ -163,24 +173,27 @@ correctly-detected test attacks ([`reports/evasion.md`](reports/evasion.md)):
 
 | model | clean TPR / FPR | ε = 0 + TTL | ε = 0.25 | ε = 1 | ε = 4 | ε = 1 + TTL |
 |---|---|---:|---:|---:|---:|---:|
-| deployed RF | 0.787 / 0.050 | **100%** | 21.1% | 38.5% | 59.7% | **100%** |
-| RF without TTL features | 0.779 / 0.048 | 0% | 21.1% | 42.9% | 63.7% | 42.3% |
-| no-TTL + adversarial training | 0.778 / 0.050 | 0% | 3.9% | 2.5% | 1.5% | 2.8% |
+| plain RF (v1 recipe, `--baseline`) | 0.787 / 0.050 | **100%** | 20.5% | 38.1% | 59.6% | **100%** |
+| RF without TTL features | 0.779 / 0.048 | 0% | 23.3% | 46.2% | 67.7% | 46.2% |
+| **served: no-TTL + adversarial training** | **0.778 / 0.050** | **0%** | **3.3%** | **2.3%** | **1.1%** | **1.9%** |
 
 (ε = 0 without TTL gives 0% for every model, a sanity check that the
 perturbation code is an exact identity at zero budget.)
 
-* **One attacker-controlled byte defeats the deployed model.** In the
+* **One attacker-controlled byte defeated the plainly trained model.** In the
   UNSW testbed, observed `sttl` = 31 is benign in 100% of rows. Setting
   the initial TTL to land there flips every detected attack to "benign".
   The rigorous eval showed that dropping TTL costs almost nothing in accuracy (0.002 F1),
   and this shows it is *required* for robustness: importance analysis
   alone would never have flagged it.
-* **Without TTL, cheap padding and slowing still evade 21–64% of
+* **Without TTL, cheap padding and slowing still evade 23–68% of
   detections.** Fuzzers and Analysis, already the weakest families, are
   the easiest to push over.
-* **Adversarial training** (perturbed training attacks added as attacks)
-  cuts evasion to ≤ 4% for 0.004 F1. The caveat matters: it is robust to
+* **Adversarial training** (perturbed training attacks added as attacks,
+  `src/models/hardening.py`) cuts evasion to ≤ 3.3% for about 0.005 F1,
+  so this is the model the API serves.
+  `tests/test_serving.py::test_hardened_model_verdict_ignores_ttl` checks
+  that changing `sttl` cannot move its score. The caveat matters: it is robust to
   the perturbation family it was trained on. An adaptive attacker with
   other knobs (protocol choice, splitting one attack across many flows)
   is out of scope and listed as residual risk.
@@ -203,22 +216,23 @@ to three drivers):
 
 ```json
 {
-  "prediction_id": 1, "prediction": 1, "p_attack": 0.982,
-  "threshold": 0.854, "model_version": "e9081021b19b",
+  "prediction_id": 1, "prediction": 1, "p_attack": 0.960,
+  "threshold": 0.870, "model_version": "f7cbf7ffa599",
   "alert": {
-    "event":  {"kind": "alert", "severity": "high", "risk_score": 98.2,
+    "event":  {"kind": "alert", "severity": "high", "risk_score": 96.0,
                "reference": "prediction:1"},
     "threat": {"framework": "MITRE ATT&CK", "tactic": "Reconnaissance / Discovery",
                "technique": [{"id": "T1595", "name": "Active Scanning"},
                              {"id": "T1046", "name": "Network Service Discovery"}],
                "mapping_fidelity": "high"},
-    "ml": {"family": "Reconnaissance", "family_probability": 0.973,
+    "ml": {"model": "random_forest_hardened",
+           "family": "Reconnaissance", "family_probability": 0.973,
            "drivers": [
-             {"feature": "ct_srv_dst",     "value": 1,  "contribution": 0.091},
-             {"feature": "ct_dst_src_ltm", "value": 1,  "contribution": 0.088},
-             {"feature": "ct_srv_src",     "value": 13, "contribution": -0.050}],
+             {"feature": "ct_srv_dst",     "value": 1,  "contribution": 0.067},
+             {"feature": "ct_dst_src_ltm", "value": 1,  "contribution": 0.052},
+             {"feature": "ct_srv_src",     "value": 13, "contribution": -0.040}],
            "artifact_driven": false},
-    "triage_note": "[HIGH] Random Forest flagged flow tcp/- state=FIN as malicious (P(attack)=0.98).\nMost likely family: Reconnaissance (p=0.97) -> T1595 Active Scanning, T1046 Network Service Discovery [mapping fidelity: high].\nMain drivers: ct_srv_dst=1 (+0.091); ct_dst_src_ltm=1 (+0.088); ct_srv_src=13 (-0.050).\nNext: Pivot on the source: count distinct dst ports/hosts in the last 15 min.\nNext: Check whether the scan is followed by Exploits from the same source."
+    "triage_note": "[HIGH] Random Forest flagged flow tcp/- state=FIN as malicious (P(attack)=0.96).\nMost likely family: Reconnaissance (p=0.97) -> T1595 Active Scanning, T1046 Network Service Discovery [mapping fidelity: high].\nMain drivers: ct_srv_dst=1 (+0.067); ct_dst_src_ltm=1 (+0.052); ct_srv_src=13 (-0.040).\nNext: Pivot on the source: count distinct dst ports/hosts in the last 15 min.\nNext: Check whether the scan is followed by Exploits from the same source."
   }
 }
 ```
@@ -227,8 +241,9 @@ Fields follow the Elastic Common Schema (`event.*`, `threat.*`), so the
 alert can ship to a SIEM as is. The drivers are *exact*: the
 Random-Forest decision-path contributions sum to the predicted
 probability (`tests/test_soc.py::test_contributions_reconstruct_predict_proba_exactly`),
-with no SHAP approximation. If TTL features carry most of the score,
-the note warns that the verdict rests on a testbed artifact. ATT&CK
+with no SHAP approximation. The served model never sees TTL. For models that do (`--baseline`), the
+note warns when TTL features carry most of the score, because that
+verdict rests on a testbed artifact. ATT&CK
 mappings carry a fidelity rating, and `Generic` is deliberately left
 unmapped rather than forced into a technique
 ([`src/soc/attack_mapping.py`](src/soc/attack_mapping.py)).
@@ -294,7 +309,7 @@ HuggingFace mirror (~45 MB), fetched by `src/data/download_dataset.py`.
 | `family_classifier.json` | `src/models/family_classifier.py` |
 | `lstm_results*.json` | `src/models/lstm_model.py` |
 
-Tests: `python -m pytest tests -q`. **105 tests**. The API and security
+Tests: `python -m pytest tests -q`. **108 tests**. The API and security
 tests run against synthetic artifacts built in `tests/conftest.py`, so
 CI exercises the service without the dataset.
 
@@ -314,10 +329,6 @@ Detailed in [`docs/limitations.md`](docs/limitations.md). The short version:
   space, so the demo replays held-out flows instead.
 * Thresholds were chosen on the training capture and do not transfer
   (5% vs 1% FPR). Recalibrate on the defended network.
-* **The served model is the baseline RF, which a TTL rewrite evades.**
-  The hardened variant (no TTL + adversarial training) is benchmarked but
-  not deployed. Promoting it is a one-line training change plus about 1
-  point of TPR, and is left as an explicit decision.
 * API: no TLS (terminate at a proxy), keys come from an env var (use a
   secret manager), and an attacker who can rewrite both an artifact and
   the manifest defeats pinning (sign the manifest). See the threat
@@ -369,7 +380,7 @@ src/
   dashboard/   app.py (Streamlit)
 docs/          threat_model.md, limitations.md
 scripts/       reproduce.sh, demo.sh
-tests/         105 tests (synthetic artifacts in conftest.py)
+tests/         108 tests (synthetic artifacts in conftest.py)
 reports/       every number in this README, regenerated by the scripts above
 ```
 

@@ -22,21 +22,21 @@ is an attack. Treat the table below as separate model reports, and the
 
 | Metric | RF (per-flow) | LSTM (per-window) |
 |---|---|---|
-| accuracy | 0.8208 | 0.8692 |
-| precision (macro) | 0.8270 | 0.9016 |
-| recall (macro) | 0.8540 | 0.8540 |
-| F1 (macro) | 0.8182 | 0.8616 |
-| F1 (weighted) | 0.8243 | 0.8651 |
-| ROC-AUC | 0.9629 | 0.9892 |
+| accuracy | 0.8153 | 0.8692 |
+| precision (macro) | 0.8237 | 0.9016 |
+| recall (macro) | 0.8500 | 0.8540 |
+| F1 (macro) | 0.8129 | 0.8616 |
+| F1 (weighted) | 0.8188 | 0.8651 |
+| ROC-AUC | 0.9600 | 0.9892 |
 | samples | 52,648 flows | 16,542 windows |
-| inference speed | 384,014 samples/s | 4,624 samples/s |
+| inference speed | 369,430 samples/s | 6,332 samples/s |
 
 ## Per-class F1
 
 | Class | RF | LSTM |
 |---|---|---|
-| normal (0) | 0.8399 | 0.8294 |
-| attack (1) | 0.7966 | 0.8939 |
+| normal (0) | 0.8340 | 0.8294 |
+| attack (1) | 0.7919 | 0.8939 |
 
 ## Confusion matrices
 
@@ -52,18 +52,16 @@ share of attack alarms belonging to that family.
 
 | family         |   support |   precision |   recall |     f1 |
 |:---------------|----------:|------------:|---------:|-------:|
-| Exploits       |      7085 |      0.2571 |   0.9941 | 0.4086 |
-| Fuzzers        |      4335 |      0.1416 |   0.8948 | 0.2445 |
-| Generic        |      3381 |      0.1234 |   0.9997 | 0.2197 |
-| Reconnaissance |      2224 |      0.0812 |   0.9996 | 0.1501 |
-| DoS            |      1186 |      0.0432 |   0.9975 | 0.0828 |
-| Shellcode      |       364 |      0.0132 |   0.9918 | 0.0260 |
-| Analysis       |       294 |      0.0105 |   0.9762 | 0.0207 |
-| Backdoor       |        70 |      0.0026 |   1.0000 | 0.0051 |
+| Exploits       |      7085 |      0.2541 |   0.9949 | 0.4048 |
+| Fuzzers        |      4335 |      0.1407 |   0.9003 | 0.2434 |
+| Generic        |      3381 |      0.1218 |   0.9994 | 0.2172 |
+| Reconnaissance |      2224 |      0.0801 |   0.9996 | 0.1484 |
+| DoS            |      1186 |      0.0427 |   0.9992 | 0.0819 |
+| Shellcode      |       364 |      0.0130 |   0.9918 | 0.0257 |
+| Analysis       |       294 |      0.0103 |   0.9694 | 0.0203 |
+| Backdoor       |        70 |      0.0025 |   1.0000 | 0.0050 |
 | Worms          |        43 |      0.0016 |   1.0000 | 0.0031 |
 | Normal         |         0 |      0.0000 |   0.0000 | 0.0000 |
-
-**Weak spots:** ['Fuzzers'] fall below 0.90 detection recall.
 
 ## Aligned comparison (McNemar)
 
@@ -73,13 +71,13 @@ test window** that also belongs to the RF flow-test split.
 | statistic | value |
 |---|---|
 | aligned pairs | 10,544 |
-| RF accuracy / F1 | 0.8179 / 0.7940 |
+| RF accuracy / F1 | 0.8147 / 0.7915 |
 | LSTM accuracy / F1 | 0.8188 / 0.7988 |
-| both correct | 7,890 |
-| only LSTM correct | 743 |
-| only RF correct | 734 |
-| McNemar chi-squared (cc) | 0.043 |
-| p-value | 0.8351 |
+| both correct | 7,881 |
+| only LSTM correct | 752 |
+| only RF correct | 709 |
+| McNemar chi-squared (cc) | 1.207 |
+| p-value | 0.2718 |
 
 **Verdict:** no significant difference.
 
@@ -102,7 +100,7 @@ baseline.
 After re-syncing the RF to the pipeline it ships with (re-fit with its
 recorded grid-search params on the current splits), the fair RF numbers
 are the ones in this report. The McNemar p-value moving from 0.0003 to
-0.835 is the **correction of that unfairness, not the LSTM
+0.272 is the **correction of that unfairness, not the LSTM
 "losing its edge"**: the LSTM's metrics are unchanged; the RF baseline
 caught up.
 
