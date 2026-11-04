@@ -11,6 +11,11 @@ grid search over key hyperparameters, and reports:
 The ``--fast`` flag subsamples the training set and shrinks the grid so
 the pipeline can be smoke-tested quickly; omit it for the full run.
 
+By default the trained model is the *hardened* variant (no TTL features
++ adversarial training, see src/models/hardening.py); ``--baseline``
+trains the plain RF that reports/evasion.md shows is evaded by a TTL
+rewrite.
+
 Usage:
     python src/models/random_forest.py
     python src/models/random_forest.py --fast
@@ -40,6 +45,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.evaluation.metrics import threshold_for_fpr  # noqa: E402
+from src.features.preprocess import DEFAULT_INPUT, load_raw  # noqa: E402
+from src.models.hardening import harden_training_set, model_features  # noqa: E402
 from src.models.manifest import write_manifest  # noqa: E402
 
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
@@ -155,6 +162,9 @@ def main() -> None:
     parser.add_argument("--no-search", action="store_true",
                         help="skip the grid search; fit the best params recorded "
                              "in reports/random_forest_results.json")
+    parser.add_argument("--baseline", action="store_true",
+                        help="train the plain v1-style RF (all features, no "
+                             "adversarial training) instead of the hardened one")
     parser.add_argument("--cv", type=int, default=3)
     parser.add_argument("--n-jobs", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
@@ -168,6 +178,22 @@ def main() -> None:
     metadata_path = MODELS_DIR / "preprocess_metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     use_class_weight = metadata.get("use_class_weight", False)
+
+    # Hardened by default (src/models/hardening.py): no TTL features and
+    # adversarial copies of the training attacks. The pipeline still
+    # computes all features; the model sees `features`.
+    names = X_train.columns.tolist()
+    features = model_features(names, hardened=not args.baseline)
+    hardening = None
+    if not args.baseline:
+        raw = load_raw(DEFAULT_INPUT)
+        train_pos = pd.read_csv(PROCESSED_DIR / "train_positions.csv")["position"]
+        pipeline = joblib.load(MODELS_DIR / "preprocess_pipeline.joblib")  # nosec B301
+        X_train, y_train, hardening = harden_training_set(
+            X_train, y_train, raw.loc[train_pos], pipeline, names, args.seed)
+        print(f"[hardened] dropped {hardening['dropped_features']}, added "
+              f"{hardening['adversarial_training']['rows']:,} adversarial attack rows")
+    X_val, X_test = X_val[features], X_test[features]
 
     results_path = REPORTS_DIR / "random_forest_results.json"
     previous = (json.loads(results_path.read_text(encoding="utf-8"))
@@ -201,7 +227,7 @@ def main() -> None:
           f"threshold@FPR<=1%={threshold:.3f}")
     print(f"Test:       accuracy={test_acc:.4f}  f1_macro={test_f1:.4f}")
 
-    importances = report_importances(model, X_train.columns.tolist())
+    importances = report_importances(model, features)
     save_importance_chart(importances)
     importances.to_csv(REPORTS_DIR / "feature_importances.csv", index=False)
 
@@ -219,13 +245,17 @@ def main() -> None:
         "test_accuracy": float(test_acc), "test_f1_macro": float(test_f1),
         "class_weight": model.class_weight,
         "ablation_drop_borderline": bool(args.drop_borderline),
+        "hardened": hardening is not None,
+        "hardening": hardening,
+        "features": features,
     }
     (REPORTS_DIR / "random_forest_results.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8")
     print(f"[ok] results -> {REPORTS_DIR / 'random_forest_results.json'}")
     (MODELS_DIR / "operating_point.json").write_text(json.dumps(
         {"threshold": threshold, "rule": summary["operating_threshold_rule"],
-         "split_protocol": summary["split_protocol"]}, indent=2), encoding="utf-8")
+         "split_protocol": summary["split_protocol"], "features": features,
+         "hardening": hardening}, indent=2), encoding="utf-8")
     write_manifest(MODELS_DIR)
 
 

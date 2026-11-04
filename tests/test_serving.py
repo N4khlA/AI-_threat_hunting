@@ -11,6 +11,7 @@ import json
 import shutil
 import sqlite3
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -220,3 +221,44 @@ def test_swap_after_verification_is_not_loaded(artifacts_dir, tmp_path):
     (models / "family_rf.joblib").write_bytes(b"not the pinned bytes")
     with pytest.raises(IntegrityError):
         load_verified_pickle(models, "family_rf.joblib", manifest)
+
+
+# --- hardened served model (no TTL features) -------------------------------
+
+@pytest.fixture
+def hardened_dir(artifacts_dir, tmp_path):
+    """Copy of the synthetic artifacts whose RF ignores the TTL features."""
+    import joblib
+    from sklearn.ensemble import RandomForestClassifier
+
+    from src.models.hardening import model_features
+    from src.models.lstm_model import transform_flows
+    from src.models.manifest import write_manifest
+    from tests.conftest import synthetic_flows
+
+    out = tmp_path / "hardened"
+    shutil.copytree(artifacts_dir, out)
+    names = json.loads((out / "preprocess_metadata.json").read_text())["feature_names"]
+    feats = model_features(names)
+    pipeline = joblib.load(out / "preprocess_pipeline.joblib")
+    train = synthetic_flows(400, seed=11)
+    X = pd.DataFrame(transform_flows(train, pipeline, names), columns=names)[feats]
+    joblib.dump(RandomForestClassifier(n_estimators=20, random_state=0).fit(X, train["Label"]),
+                out / "random_forest_best.joblib")
+    (out / "operating_point.json").write_text(json.dumps(
+        {"threshold": 0.5, "features": feats, "hardening": {"dropped_features": ["sttl"]}}))
+    write_manifest(out)
+    return out
+
+
+def test_hardened_model_verdict_ignores_ttl(hardened_dir, tmp_path, monkeypatch):
+    """The TTL skeleton key (reports/evasion.md) must not move the score."""
+    _env(monkeypatch, hardened_dir, tmp_path)
+    with TestClient(api.app) as c:
+        scores = {ttl: c.post("/predict", json={**attack_record(), "sttl": ttl},
+                              headers=SENSOR).json()
+                  for ttl in (31, 62, 254)}
+    assert len({round(r["p_attack"], 9) for r in scores.values()}) == 1
+    assert scores[31]["prediction"] == 1
+    drivers = {d["feature"] for d in scores[31]["alert"]["ml"]["drivers"]}
+    assert not drivers & {"sttl", "dttl", "ct_state_ttl"}

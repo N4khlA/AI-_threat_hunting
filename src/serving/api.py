@@ -204,10 +204,12 @@ def _load_artifacts() -> dict:
     metadata = json.loads((mdir / "preprocess_metadata.json").read_text(encoding="utf-8"))
     # The alert threshold is security-relevant (threshold=1.0 blinds the
     # IDS), so it lives in models/ and is pinned like any other artifact.
-    threshold = 0.5
+    # The served RF may see a subset of the pipeline's features (hardened
+    # model: no TTL); the subset is pinned with the threshold.
+    operating = {}
     if "operating_point.json" in present:
-        threshold = float(json.loads((mdir / "operating_point.json")
-                                     .read_text(encoding="utf-8"))["threshold"])
+        operating = json.loads((mdir / "operating_point.json").read_text(encoding="utf-8"))
+    threshold = float(operating.get("threshold", 0.5))
     threshold = float(os.environ.get("IDS_ALERT_THRESHOLD", threshold))
     lstm = None
     if "lstm_best.keras" in present:
@@ -222,6 +224,8 @@ def _load_artifacts() -> dict:
         "lstm": lstm,
         "metadata": metadata,
         "threshold": threshold,
+        "model_features": operating.get("features") or metadata["feature_names"],
+        "hardened": bool(operating.get("hardening")),
         "model_version": manifest["files"]["random_forest_best.joblib"]["sha256"][:12],
     }
 
@@ -282,15 +286,16 @@ def score_flow(art: dict, record: dict) -> dict:
     names = art["metadata"]["feature_names"]
     X = pd.DataFrame(transform_flows(_frame([record], names), art["pipeline"], names),
                      columns=names)
-    p_attack = float(art["rf"].predict_proba(X)[0, 1])
+    X_model = X[art["model_features"]]
+    p_attack = float(art["rf"].predict_proba(X_model)[0, 1])
     family_probs: dict[str, float] = {}
     drivers: list[dict] = []
     if p_attack >= art["threshold"]:
         if art["family"] is not None:
             probs = art["family"].predict_proba(X)[0]
             family_probs = {str(c): float(p) for c, p in zip(art["family"].classes_, probs)}
-        _, contrib = path_contributions(art["rf"], X.to_numpy())
-        drivers = top_drivers(contrib[0], names, record)
+        _, contrib = path_contributions(art["rf"], X_model.to_numpy())
+        drivers = top_drivers(contrib[0], art["model_features"], record)
     return {"p_attack": p_attack, "family_probs": family_probs, "drivers": drivers}
 
 
@@ -347,6 +352,8 @@ def predict(record: FlowRecord,
         record_json=json.dumps(raw))
     alert = build_alert(prediction_id, raw, out["p_attack"], out["family_probs"],
                         out["drivers"], art["threshold"], art["model_version"])
+    if alert and art["hardened"]:
+        alert["ml"]["model"] = "random_forest_hardened"
     return PredictResponse(prediction_id=prediction_id, prediction=prediction,
                            p_attack=out["p_attack"], threshold=art["threshold"],
                            model_version=art["model_version"], alert=alert)

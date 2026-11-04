@@ -54,6 +54,8 @@ matplotlib.use("Agg")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.models.hardening import served_features  # noqa: E402
+
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
 REPORTS_DIR = PROJECT_ROOT / "reports"
@@ -66,6 +68,7 @@ UNITS = {"rf": "per-flow", "lstm": "per-window"}
 
 def load_rf_test() -> tuple[np.ndarray, np.ndarray, pd.Series, pd.Series]:
     X_test = pd.read_csv(PROCESSED_DIR / "X_test.csv")
+    X_test = X_test[served_features(MODELS_DIR, X_test.columns.tolist())]
     y_test = pd.read_csv(PROCESSED_DIR / "y_test.csv", usecols=["label"]).iloc[:, 0]
     attack_cat = pd.read_csv(PROCESSED_DIR / "attack_cat_test.csv",
                              usecols=["attack_cat"]).iloc[:, 0]

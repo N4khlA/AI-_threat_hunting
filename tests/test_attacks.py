@@ -75,3 +75,33 @@ def test_poison_rows_are_target_family_labelled_benign():
     assert len(rows) == 7 and (labels == 0).all()
     assert set(rows["a"]) <= {5, 6, 7, 8, 9}
     assert poison_rows(X, fam, "Worms", 3, seed=0)[0].empty
+
+
+# --- hardening recipe (src/models/hardening.py) ----------------------------
+
+def test_model_features_drop_ttl_only():
+    from src.models.hardening import TTL_FEATURES, model_features
+
+    names = ["sbytes", "sttl", "dttl", "ct_state_ttl", "proto"]
+    assert model_features(names) == ["sbytes", "proto"]
+    assert model_features(names, hardened=False) == names
+    assert not set(model_features(names)) & set(TTL_FEATURES)
+
+
+def test_harden_training_set_adds_labelled_attack_copies(artifacts_dir):
+    from src.models.hardening import harden_training_set
+    from src.models.lstm_model import transform_flows
+
+    pipeline = joblib.load(artifacts_dir / "preprocess_pipeline.joblib")
+    names = json.loads((artifacts_dir / "preprocess_metadata.json").read_text())["feature_names"]
+    raw = synthetic_flows(200, seed=7)
+    X = pd.DataFrame(transform_flows(raw, pipeline, names), columns=names)
+    X_h, y_h, info = harden_training_set(X, raw["Label"], raw, pipeline, names, seed=0)
+    n_attacks = int((raw["Label"] == 1).sum())
+    assert len(X_h) == len(X) + n_attacks and len(y_h) == len(X_h)
+    assert (y_h.iloc[len(X):] == 1).all()
+    assert "sttl" not in X_h.columns
+    assert info["adversarial_training"]["rows"] == n_attacks
+    # deterministic: same seed, same augmentation (retrain parity relies on it)
+    X_h2, _, _ = harden_training_set(X, raw["Label"], raw, pipeline, names, seed=0)
+    pd.testing.assert_frame_equal(X_h, X_h2)

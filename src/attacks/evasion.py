@@ -21,10 +21,13 @@ Threat model (docs/threat_model.md, MITRE ATLAS AML.T0015 / AML.T0043):
 
 Models compared (same official_novel split, thresholds picked on
 validation for FPR <= 1%):
-    baseline    the deployed Random Forest
-    no_ttl      retrained without sttl/dttl/ct_state_ttl
-    adv_trained no_ttl + adversarial training: perturbed copies of the
-                training attacks (eps ~ U(0, 2)) added as attacks
+    baseline         plain RF on all features (the v1 recipe;
+                     ``random_forest.py --baseline``)
+    no_ttl           plain RF without sttl/dttl/ct_state_ttl
+    served_hardened  the model the API serves, loaded from models/ with its
+                     pinned threshold: no TTL + adversarial training
+                     (perturbed copies of the training attacks, knobs
+                     ~ U(0, 2), labelled attack; src/models/hardening.py)
 
 Usage:
     python src/attacks/evasion.py                    # ~5 min
@@ -51,51 +54,16 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.evaluation.metrics import binary_report, threshold_for_fpr  # noqa: E402
 from src.features.preprocess import DEFAULT_INPUT, load_raw  # noqa: E402
+from src.attacks.perturb import BENIGN_TTLS, perturb  # noqa: E402,F401
+from src.models.hardening import TTL_FEATURES  # noqa: E402
 from src.models.lstm_model import transform_flows  # noqa: E402
 
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
 REPORTS_DIR = PROJECT_ROOT / "reports"
-TTL_FEATURES = ["sttl", "dttl", "ct_state_ttl"]
-# the deployed RF was fitted on a DataFrame; we score column-sliced arrays
+# the served RF was fitted on a DataFrame; we score column-sliced arrays
 warnings.filterwarnings("ignore", message="X does not have valid feature names")
-BENIGN_TTLS = np.array([31, 62])
 EPSILONS = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0)
-
-
-def _ratio(new: pd.Series, old: pd.Series) -> pd.Series:
-    old = old.astype(float)
-    return (new / old.where(old > 0)).fillna(1.0)
-
-
-def perturb(df: pd.DataFrame, pad, pkts, slow, ttl=None) -> pd.DataFrame:
-    """Attacker-side, self-consistent perturbation of raw flow records.
-
-    ``pad``/``pkts``/``slow`` are scalars or per-row arrays >= 0; ``ttl``
-    is None (untouched), a scalar or a per-row array.
-    """
-    out = df.copy()
-    pad, pkts, slow = (np.broadcast_to(np.asarray(v, float), len(df)) for v in (pad, pkts, slow))
-    spkts = df["Spkts"].astype(float).clip(lower=1)
-    new_spkts = np.ceil(spkts * (1 + pkts))
-    sbytes = df["sbytes"].astype(float)
-    new_sbytes = sbytes * (1 + pad) + 40.0 * (new_spkts - spkts)
-    stretch = 1 + slow
-
-    out["Spkts"] = new_spkts
-    out["sbytes"] = new_sbytes
-    out["dur"] = df["dur"].astype(float) * stretch
-    out["Sload"] = df["Sload"].astype(float) * _ratio(new_sbytes, sbytes) / stretch
-    out["Dload"] = df["Dload"].astype(float) / stretch
-    # relative update: UNSW stores smeansz rounded, so recomputing
-    # sbytes/Spkts would perturb flows even at zero budget
-    out["smeansz"] = (df["smeansz"].astype(float) * _ratio(new_sbytes, sbytes)
-                      / (new_spkts / spkts))
-    out["Sintpkt"] = df["Sintpkt"].astype(float) * stretch * spkts / new_spkts
-    out["Dintpkt"] = df["Dintpkt"].astype(float) * stretch
-    if ttl is not None:
-        out["sttl"] = np.broadcast_to(np.asarray(ttl), len(df))
-    return out
 
 
 class Scored:
@@ -159,25 +127,21 @@ def main() -> None:
     no_ttl_cols = [c for c in names if c not in TTL_FEATURES]
     no_ttl_idx = [names.index(c) for c in no_ttl_cols]
 
-    # adversarial training set: perturbed copies of the training attacks
-    train_attacks = raw.loc[pos["train"]].query("Label == 1")
-    k = len(train_attacks)
-    aug = perturb(train_attacks, rng.uniform(0, 2, k), rng.uniform(0, 2, k),
-                  rng.uniform(0, 2, k), ttl=rng.choice(BENIGN_TTLS, k))
-    X_aug = np.vstack([X_train, transform_flows(aug, pipeline, names)])
-    y_aug = np.concatenate([y_train, np.ones(k, dtype=int)])
-
+    # The served model (hardened, loaded from models/ with its pinned
+    # threshold and feature subset) against two plainly trained RFs.
+    operating = json.loads((MODELS_DIR / "operating_point.json").read_text(encoding="utf-8"))
+    served = joblib.load(MODELS_DIR / "random_forest_best.joblib")  # nosec B301
+    served_cols = operating.get("features") or names
     models = {}
-    rf = joblib.load(MODELS_DIR / "random_forest_best.joblib")  # nosec B301
-    for name, model, cols in (
-        ("baseline", rf, names),
-        ("no_ttl", fit_rf(X_train[:, no_ttl_idx], y_train, args.seed), no_ttl_cols),
-        ("adv_trained", fit_rf(X_aug[:, no_ttl_idx], y_aug, args.seed), no_ttl_cols),
+    for name, model, cols, thr in (
+        ("baseline", fit_rf(X_train, y_train, args.seed), names, None),
+        ("no_ttl", fit_rf(X_train[:, no_ttl_idx], y_train, args.seed), no_ttl_cols, None),
+        ("served_hardened", served, served_cols, float(operating["threshold"])),
     ):
-        tmp = Scored(model, names, cols, 0.5)
-        thr = threshold_for_fpr(y_val, tmp.p_attack(X_val), 0.01)
+        if thr is None:
+            thr = threshold_for_fpr(y_val, Scored(model, names, cols, 0.5).p_attack(X_val), 0.01)
         models[name] = Scored(model, names, cols, thr)
-        print(f"[model] {name}: threshold@valFPR1% = {thr:.3f}")
+        print(f"[model] {name}: threshold = {thr:.3f}")
 
     results: dict = {"samples": args.samples, "queries": args.queries,
                      "epsilons": list(EPSILONS), "models": {}}

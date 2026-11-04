@@ -68,7 +68,8 @@ from src.features.preprocess import (  # noqa: E402
     save_artifacts,
     scale,
 )
-from src.evaluation.metrics import per_family_recall  # noqa: E402
+from src.evaluation.metrics import per_family_recall, threshold_for_fpr  # noqa: E402
+from src.models.hardening import harden_training_set, model_features  # noqa: E402
 from src.models.manifest import write_manifest  # noqa: E402
 from src.serving.prediction_log import load_predictions  # noqa: E402
 
@@ -81,6 +82,7 @@ DEFAULT_INPUT = RAW_DIR / "UNSW_NB15_combined.csv"
 MODEL_PATH = MODELS_DIR / "random_forest_best.joblib"
 RF_RESULTS = REPORTS_DIR / "random_forest_results.json"
 METADATA_PATH = MODELS_DIR / "preprocess_metadata.json"
+OPERATING_PATH = MODELS_DIR / "operating_point.json"
 
 LOG_COLUMNS = ["ts", "model", "prediction", "confidence", "true_label",
                "predicted_family", "true_family", "n_flows", "record_json",
@@ -344,13 +346,28 @@ def main() -> None:
                     if k in FALLBACK_RF_PARAMS}
             rf_params = {**FALLBACK_RF_PARAMS, **best}
 
-    new_model = train_rf(X_train, y_train, rf_params, class_weight,
+    # Same recipe as the served model (src/models/hardening.py): if it was
+    # hardened, the candidate is too, so a retrain cannot silently bring
+    # back the TTL skeleton key.
+    operating = (json.loads(OPERATING_PATH.read_text(encoding="utf-8"))
+                 if OPERATING_PATH.exists() else {})
+    names = X_train.columns.tolist()
+    old_features = operating.get("features") or names
+    hardening = None
+    X_fit, y_fit = X_train, y_train
+    if operating.get("hardening"):
+        pipeline = {"imputers": imputers, "encoder": encoder_state, "scaler": scaler}
+        X_fit, y_fit, hardening = harden_training_set(
+            X_train, y_train, full.iloc[:n_train], pipeline, names, args.seed)
+    new_features = model_features(names, hardened=hardening is not None)
+
+    new_model = train_rf(X_fit[new_features], y_fit, rf_params, class_weight,
                          args.n_jobs, args.seed)
 
-    old_model = joblib.load(MODEL_PATH)
+    old_model = joblib.load(MODEL_PATH)  # nosec B301
     test_families = attack_cat_splits.get("test")
-    old_metrics = evaluate(old_model, X_test, y_test, test_families)
-    new_metrics = evaluate(new_model, X_test, y_test, test_families)
+    old_metrics = evaluate(old_model, X_test[old_features], y_test, test_families)
+    new_metrics = evaluate(new_model, X_test[new_features], y_test, test_families)
     print(f"\nOld model on held-out test: "
           f"accuracy={old_metrics['accuracy']:.4f}  "
           f"f1_macro={old_metrics['f1_macro']:.4f}")
@@ -402,6 +419,11 @@ def main() -> None:
         X_train, y_train, X_val, y_val, X_test, y_test,
         scaler, imputers, encoder_state, new_metadata,
     )
+    threshold = threshold_for_fpr(
+        y_val, new_model.predict_proba(X_val[new_features])[:, 1], 0.01)
+    OPERATING_PATH.write_text(json.dumps(
+        {**operating, "threshold": threshold, "features": new_features,
+         "hardening": hardening}, indent=2), encoding="utf-8")
     write_manifest(MODELS_DIR)
     print("\n[done] models + pipeline replaced. The API serves the new "
           "model on next restart.")
