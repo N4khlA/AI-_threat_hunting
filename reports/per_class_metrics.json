@@ -1,83 +1,83 @@
 {
-  "classification_report": "              precision    recall  f1-score   support\n\n           0     0.9194    0.9483    0.9337     13950\n           1     0.9703    0.9531    0.9616     24701\n\n    accuracy                         0.9514     38651\n   macro avg     0.9449    0.9507    0.9476     38651\nweighted avg     0.9519    0.9514    0.9515     38651\n",
+  "classification_report": "              precision    recall  f1-score   support\n\n           0     0.9797    0.7350    0.8399     33666\n           1     0.6743    0.9730    0.7966     18982\n\n    accuracy                         0.8208     52648\n   macro avg     0.8270    0.8540    0.8182     52648\nweighted avg     0.8696    0.8208    0.8243     52648\n",
   "per_family": [
     {
       "family": "Normal",
-      "records": 13950,
+      "records": 33666,
       "attack_records": 0,
       "detected_as_attack": 0,
       "detection_rate": 0.0,
-      "false_positive_rate": 0.05168458781362007
-    },
-    {
-      "family": "Generic",
-      "records": 8817,
-      "attack_records": 8817,
-      "detected_as_attack": 8814,
-      "detection_rate": 0.9996597482136781,
-      "false_positive_rate": 0.0
+      "false_positive_rate": 0.2649557416978554
     },
     {
       "family": "Exploits",
-      "records": 6647,
-      "attack_records": 6647,
-      "detected_as_attack": 6578,
-      "detection_rate": 0.9896193771626297,
+      "records": 7085,
+      "attack_records": 7085,
+      "detected_as_attack": 7043,
+      "detection_rate": 0.9940719830628088,
       "false_positive_rate": 0.0
     },
     {
       "family": "Fuzzers",
-      "records": 3617,
-      "attack_records": 3617,
-      "detected_as_attack": 2603,
-      "detection_rate": 0.7196571744539674,
+      "records": 4335,
+      "attack_records": 4335,
+      "detected_as_attack": 3879,
+      "detection_rate": 0.8948096885813149,
       "false_positive_rate": 0.0
     },
     {
-      "family": "DoS",
-      "records": 2489,
-      "attack_records": 2489,
-      "detected_as_attack": 2477,
-      "detection_rate": 0.9951787866613098,
+      "family": "Generic",
+      "records": 3381,
+      "attack_records": 3381,
+      "detected_as_attack": 3380,
+      "detection_rate": 0.9997042295178941,
       "false_positive_rate": 0.0
     },
     {
       "family": "Reconnaissance",
-      "records": 2130,
-      "attack_records": 2130,
-      "detected_as_attack": 2126,
-      "detection_rate": 0.9981220657276996,
+      "records": 2224,
+      "attack_records": 2224,
+      "detected_as_attack": 2223,
+      "detection_rate": 0.9995503597122302,
       "false_positive_rate": 0.0
     },
     {
-      "family": "Analysis",
-      "records": 413,
-      "attack_records": 413,
-      "detected_as_attack": 363,
-      "detection_rate": 0.8789346246973365,
-      "false_positive_rate": 0.0
-    },
-    {
-      "family": "Backdoor",
-      "records": 340,
-      "attack_records": 340,
-      "detected_as_attack": 339,
-      "detection_rate": 0.9970588235294118,
+      "family": "DoS",
+      "records": 1186,
+      "attack_records": 1186,
+      "detected_as_attack": 1183,
+      "detection_rate": 0.9974704890387859,
       "false_positive_rate": 0.0
     },
     {
       "family": "Shellcode",
-      "records": 214,
-      "attack_records": 214,
-      "detected_as_attack": 208,
-      "detection_rate": 0.9719626168224299,
+      "records": 364,
+      "attack_records": 364,
+      "detected_as_attack": 361,
+      "detection_rate": 0.9917582417582418,
+      "false_positive_rate": 0.0
+    },
+    {
+      "family": "Analysis",
+      "records": 294,
+      "attack_records": 294,
+      "detected_as_attack": 287,
+      "detection_rate": 0.9761904761904762,
+      "false_positive_rate": 0.0
+    },
+    {
+      "family": "Backdoor",
+      "records": 70,
+      "attack_records": 70,
+      "detected_as_attack": 70,
+      "detection_rate": 1.0,
       "false_positive_rate": 0.0
     },
     {
       "family": "Worms",
-      "records": 34,
-      "attack_records": 34,
-      "detected_as_attack": 34,
+      "records": 43,
+      "attack_records": 43,
+      "detected_as_attack": 43,
       "detection_rate": 1.0,
       "false_positive_rate": 0.0
     }

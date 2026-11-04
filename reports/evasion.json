@@ -1,0 +1,521 @@
+{
+  "samples": 1500,
+  "queries": 40,
+  "epsilons": [
+    0.0,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    4.0
+  ],
+  "models": {
+    "baseline": {
+      "clean": {
+        "threshold": 0.8536666666666666,
+        "accuracy": 0.8912019449931622,
+        "f1_macro": 0.8784845212048816,
+        "roc_auc": 0.9629448733814384,
+        "pr_auc": 0.9413136543971772,
+        "attack_share": 0.36054550980094213,
+        "n": 52648,
+        "tpr": 0.7872721525655885,
+        "fpr": 0.05019901384185826,
+        "precision": 0.8984008656967657
+      },
+      "threshold": 0.8536666666666666,
+      "evasion": {
+        "volume_timing": {
+          "0.0": {
+            "evasion_rate": 0.0,
+            "per_family": {
+              "Analysis": 0.0,
+              "DoS": 0.0,
+              "Exploits": 0.0,
+              "Fuzzers": 0.0,
+              "Generic": 0.0,
+              "Reconnaissance": 0.0,
+              "Shellcode": 0.0
+            }
+          },
+          "0.25": {
+            "evasion_rate": 0.21066666666666667,
+            "per_family": {
+              "Analysis": 0.4642857142857143,
+              "DoS": 0.13829787234042554,
+              "Exploits": 0.055891238670694864,
+              "Fuzzers": 0.5765765765765766,
+              "Generic": 0.34911242603550297,
+              "Reconnaissance": 0.2857142857142857,
+              "Shellcode": 0.21212121212121213
+            }
+          },
+          "0.5": {
+            "evasion_rate": 0.24,
+            "per_family": {
+              "Analysis": 0.8214285714285714,
+              "DoS": 0.19148936170212766,
+              "Exploits": 0.0770392749244713,
+              "Fuzzers": 0.6936936936936937,
+              "Generic": 0.3165680473372781,
+              "Reconnaissance": 0.33482142857142855,
+              "Shellcode": 0.2727272727272727
+            }
+          },
+          "1.0": {
+            "evasion_rate": 0.38466666666666666,
+            "per_family": {
+              "Analysis": 0.9642857142857143,
+              "DoS": 0.24468085106382978,
+              "Exploits": 0.1419939577039275,
+              "Fuzzers": 0.8288288288288288,
+              "Generic": 0.6035502958579881,
+              "Reconnaissance": 0.5446428571428571,
+              "Shellcode": 0.42424242424242425
+            }
+          },
+          "2.0": {
+            "evasion_rate": 0.5033333333333333,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 0.3404255319148936,
+              "Exploits": 0.21450151057401812,
+              "Fuzzers": 0.918918918918919,
+              "Generic": 0.7928994082840237,
+              "Reconnaissance": 0.7098214285714286,
+              "Shellcode": 0.6363636363636364
+            }
+          },
+          "4.0": {
+            "evasion_rate": 0.5966666666666667,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 0.4787234042553192,
+              "Exploits": 0.3021148036253776,
+              "Fuzzers": 0.9459459459459459,
+              "Generic": 0.8816568047337278,
+              "Reconnaissance": 0.8258928571428571,
+              "Shellcode": 0.8787878787878788
+            }
+          }
+        },
+        "volume_timing_ttl": {
+          "0.0": {
+            "evasion_rate": 1.0,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 1.0,
+              "Exploits": 1.0,
+              "Fuzzers": 1.0,
+              "Generic": 1.0,
+              "Reconnaissance": 1.0,
+              "Shellcode": 1.0
+            }
+          },
+          "0.25": {
+            "evasion_rate": 1.0,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 1.0,
+              "Exploits": 1.0,
+              "Fuzzers": 1.0,
+              "Generic": 1.0,
+              "Reconnaissance": 1.0,
+              "Shellcode": 1.0
+            }
+          },
+          "0.5": {
+            "evasion_rate": 1.0,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 1.0,
+              "Exploits": 1.0,
+              "Fuzzers": 1.0,
+              "Generic": 1.0,
+              "Reconnaissance": 1.0,
+              "Shellcode": 1.0
+            }
+          },
+          "1.0": {
+            "evasion_rate": 1.0,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 1.0,
+              "Exploits": 1.0,
+              "Fuzzers": 1.0,
+              "Generic": 1.0,
+              "Reconnaissance": 1.0,
+              "Shellcode": 1.0
+            }
+          },
+          "2.0": {
+            "evasion_rate": 1.0,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 1.0,
+              "Exploits": 1.0,
+              "Fuzzers": 1.0,
+              "Generic": 1.0,
+              "Reconnaissance": 1.0,
+              "Shellcode": 1.0
+            }
+          },
+          "4.0": {
+            "evasion_rate": 1.0,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 1.0,
+              "Exploits": 1.0,
+              "Fuzzers": 1.0,
+              "Generic": 1.0,
+              "Reconnaissance": 1.0,
+              "Shellcode": 1.0
+            }
+          }
+        }
+      }
+    },
+    "no_ttl": {
+      "clean": {
+        "threshold": 0.8607619047619047,
+        "accuracy": 0.8895494605683026,
+        "f1_macro": 0.8762576366973114,
+        "roc_auc": 0.9615802497794171,
+        "pr_auc": 0.9388302107950247,
+        "attack_share": 0.36054550980094213,
+        "n": 52648,
+        "tpr": 0.7791065219681804,
+        "fpr": 0.0481791718647894,
+        "precision": 0.9011638535128877
+      },
+      "threshold": 0.8607619047619047,
+      "evasion": {
+        "volume_timing": {
+          "0.0": {
+            "evasion_rate": 0.0,
+            "per_family": {
+              "Analysis": 0.0,
+              "DoS": 0.0,
+              "Exploits": 0.0,
+              "Fuzzers": 0.0,
+              "Generic": 0.0,
+              "Reconnaissance": 0.0,
+              "Shellcode": 0.0
+            }
+          },
+          "0.25": {
+            "evasion_rate": 0.21133333333333335,
+            "per_family": {
+              "Analysis": 0.2222222222222222,
+              "DoS": 0.10833333333333334,
+              "Exploits": 0.03894080996884735,
+              "Fuzzers": 0.584,
+              "Generic": 0.3827893175074184,
+              "Reconnaissance": 0.2975609756097561,
+              "Shellcode": 0.27906976744186046
+            }
+          },
+          "0.5": {
+            "evasion_rate": 0.236,
+            "per_family": {
+              "Analysis": 0.5555555555555556,
+              "DoS": 0.14166666666666666,
+              "Exploits": 0.0529595015576324,
+              "Fuzzers": 0.8,
+              "Generic": 0.32344213649851633,
+              "Reconnaissance": 0.33170731707317075,
+              "Shellcode": 0.3488372093023256
+            }
+          },
+          "1.0": {
+            "evasion_rate": 0.42933333333333334,
+            "per_family": {
+              "Analysis": 0.7777777777777778,
+              "DoS": 0.23333333333333334,
+              "Exploits": 0.12149532710280374,
+              "Fuzzers": 0.904,
+              "Generic": 0.7655786350148368,
+              "Reconnaissance": 0.6341463414634146,
+              "Shellcode": 0.4883720930232558
+            }
+          },
+          "2.0": {
+            "evasion_rate": 0.5373333333333333,
+            "per_family": {
+              "Analysis": 0.9444444444444444,
+              "DoS": 0.35833333333333334,
+              "Exploits": 0.21495327102803738,
+              "Fuzzers": 0.936,
+              "Generic": 0.8813056379821959,
+              "Reconnaissance": 0.775609756097561,
+              "Shellcode": 0.7209302325581395
+            }
+          },
+          "4.0": {
+            "evasion_rate": 0.6373333333333333,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 0.48333333333333334,
+              "Exploits": 0.35046728971962615,
+              "Fuzzers": 0.976,
+              "Generic": 0.9050445103857567,
+              "Reconnaissance": 0.8780487804878049,
+              "Shellcode": 1.0
+            }
+          }
+        },
+        "volume_timing_ttl": {
+          "0.0": {
+            "evasion_rate": 0.0,
+            "per_family": {
+              "Analysis": 0.0,
+              "DoS": 0.0,
+              "Exploits": 0.0,
+              "Fuzzers": 0.0,
+              "Generic": 0.0,
+              "Reconnaissance": 0.0,
+              "Shellcode": 0.0
+            }
+          },
+          "0.25": {
+            "evasion_rate": 0.21133333333333335,
+            "per_family": {
+              "Analysis": 0.2222222222222222,
+              "DoS": 0.11666666666666667,
+              "Exploits": 0.037383177570093455,
+              "Fuzzers": 0.592,
+              "Generic": 0.3827893175074184,
+              "Reconnaissance": 0.2926829268292683,
+              "Shellcode": 0.27906976744186046
+            }
+          },
+          "0.5": {
+            "evasion_rate": 0.24,
+            "per_family": {
+              "Analysis": 0.4444444444444444,
+              "DoS": 0.14166666666666666,
+              "Exploits": 0.0514018691588785,
+              "Fuzzers": 0.744,
+              "Generic": 0.35311572700296734,
+              "Reconnaissance": 0.35609756097560974,
+              "Shellcode": 0.3488372093023256
+            }
+          },
+          "1.0": {
+            "evasion_rate": 0.42333333333333334,
+            "per_family": {
+              "Analysis": 0.8333333333333334,
+              "DoS": 0.20833333333333334,
+              "Exploits": 0.13551401869158877,
+              "Fuzzers": 0.872,
+              "Generic": 0.7388724035608308,
+              "Reconnaissance": 0.6195121951219512,
+              "Shellcode": 0.4883720930232558
+            }
+          },
+          "2.0": {
+            "evasion_rate": 0.544,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 0.3333333333333333,
+              "Exploits": 0.22429906542056074,
+              "Fuzzers": 0.952,
+              "Generic": 0.884272997032641,
+              "Reconnaissance": 0.7658536585365854,
+              "Shellcode": 0.8604651162790697
+            }
+          },
+          "4.0": {
+            "evasion_rate": 0.6426666666666667,
+            "per_family": {
+              "Analysis": 1.0,
+              "DoS": 0.5,
+              "Exploits": 0.3582554517133956,
+              "Fuzzers": 0.984,
+              "Generic": 0.9050445103857567,
+              "Reconnaissance": 0.8829268292682927,
+              "Shellcode": 0.9767441860465116
+            }
+          }
+        }
+      }
+    },
+    "adv_trained": {
+      "clean": {
+        "threshold": 0.8698690476190478,
+        "accuracy": 0.888010940586537,
+        "f1_macro": 0.8745916392494482,
+        "roc_auc": 0.9600366748343785,
+        "pr_auc": 0.9372152220619205,
+        "attack_share": 0.36054550980094213,
+        "n": 52648,
+        "tpr": 0.7778421662627752,
+        "fpr": 0.049872274698508884,
+        "precision": 0.8978958890780832
+      },
+      "threshold": 0.8698690476190478,
+      "evasion": {
+        "volume_timing": {
+          "0.0": {
+            "evasion_rate": 0.0,
+            "per_family": {
+              "Analysis": 0.0,
+              "Backdoor": 0.0,
+              "DoS": 0.0,
+              "Exploits": 0.0,
+              "Fuzzers": 0.0,
+              "Generic": 0.0,
+              "Reconnaissance": 0.0,
+              "Shellcode": 0.0
+            }
+          },
+          "0.25": {
+            "evasion_rate": 0.03866666666666667,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.09090909090909091,
+              "DoS": 0.06796116504854369,
+              "Exploits": 0.026825633383010434,
+              "Fuzzers": 0.14912280701754385,
+              "Generic": 0.0029940119760479044,
+              "Reconnaissance": 0.056338028169014086,
+              "Shellcode": 0.03225806451612903
+            }
+          },
+          "0.5": {
+            "evasion_rate": 0.036,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.09090909090909091,
+              "DoS": 0.06796116504854369,
+              "Exploits": 0.026825633383010434,
+              "Fuzzers": 0.13157894736842105,
+              "Generic": 0.0,
+              "Reconnaissance": 0.051643192488262914,
+              "Shellcode": 0.03225806451612903
+            }
+          },
+          "1.0": {
+            "evasion_rate": 0.024666666666666667,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.0,
+              "DoS": 0.05825242718446602,
+              "Exploits": 0.02384500745156483,
+              "Fuzzers": 0.08771929824561403,
+              "Generic": 0.0,
+              "Reconnaissance": 0.018779342723004695,
+              "Shellcode": 0.0
+            }
+          },
+          "2.0": {
+            "evasion_rate": 0.016666666666666666,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.09090909090909091,
+              "DoS": 0.02912621359223301,
+              "Exploits": 0.01788375558867362,
+              "Fuzzers": 0.06140350877192982,
+              "Generic": 0.0,
+              "Reconnaissance": 0.004694835680751174,
+              "Shellcode": 0.0
+            }
+          },
+          "4.0": {
+            "evasion_rate": 0.014666666666666666,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.0,
+              "DoS": 0.019417475728155338,
+              "Exploits": 0.019374068554396422,
+              "Fuzzers": 0.03508771929824561,
+              "Generic": 0.0,
+              "Reconnaissance": 0.009389671361502348,
+              "Shellcode": 0.0
+            }
+          }
+        },
+        "volume_timing_ttl": {
+          "0.0": {
+            "evasion_rate": 0.0,
+            "per_family": {
+              "Analysis": 0.0,
+              "Backdoor": 0.0,
+              "DoS": 0.0,
+              "Exploits": 0.0,
+              "Fuzzers": 0.0,
+              "Generic": 0.0,
+              "Reconnaissance": 0.0,
+              "Shellcode": 0.0
+            }
+          },
+          "0.25": {
+            "evasion_rate": 0.037333333333333336,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.09090909090909091,
+              "DoS": 0.07766990291262135,
+              "Exploits": 0.02384500745156483,
+              "Fuzzers": 0.14912280701754385,
+              "Generic": 0.0029940119760479044,
+              "Reconnaissance": 0.051643192488262914,
+              "Shellcode": 0.03225806451612903
+            }
+          },
+          "0.5": {
+            "evasion_rate": 0.034666666666666665,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.09090909090909091,
+              "DoS": 0.06796116504854369,
+              "Exploits": 0.03129657228017884,
+              "Fuzzers": 0.10526315789473684,
+              "Generic": 0.005988023952095809,
+              "Reconnaissance": 0.03755868544600939,
+              "Shellcode": 0.0
+            }
+          },
+          "1.0": {
+            "evasion_rate": 0.028,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.09090909090909091,
+              "DoS": 0.05825242718446602,
+              "Exploits": 0.028315946348733235,
+              "Fuzzers": 0.09649122807017543,
+              "Generic": 0.0,
+              "Reconnaissance": 0.018779342723004695,
+              "Shellcode": 0.0
+            }
+          },
+          "2.0": {
+            "evasion_rate": 0.019333333333333334,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.0,
+              "DoS": 0.04854368932038835,
+              "Exploits": 0.01788375558867362,
+              "Fuzzers": 0.07894736842105263,
+              "Generic": 0.0,
+              "Reconnaissance": 0.009389671361502348,
+              "Shellcode": 0.0
+            }
+          },
+          "4.0": {
+            "evasion_rate": 0.014,
+            "per_family": {
+              "Analysis": 0.043478260869565216,
+              "Backdoor": 0.0,
+              "DoS": 0.02912621359223301,
+              "Exploits": 0.014903129657228018,
+              "Fuzzers": 0.043859649122807015,
+              "Generic": 0.0,
+              "Reconnaissance": 0.009389671361502348,
+              "Shellcode": 0.0
+            }
+          }
+        }
+      }
+    }
+  }
+}

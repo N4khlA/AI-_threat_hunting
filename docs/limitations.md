@@ -50,7 +50,10 @@ use common ports" and drive attack flows toward the normal class:
 This is now measured rather than asserted: `src/attacks/evasion.py`
 runs a black-box, budget-constrained evasion against the deployed RF, a
 no-TTL variant and an adversarially trained variant
-(`reports/evasion.md`). Mitigations: feature-difficulty hardening (drop
+(`reports/evasion.md`). Headline: choosing the initial TTL alone evades
+the deployed RF on 100% of detected attacks; without TTL features,
+padding/slowing still evades 21-64%; adversarial training holds it to
+<= 4% for this perturbation family. Mitigations: feature-difficulty hardening (drop
 features an attacker trivially controls), adversarial training, and
 never relying on a single ML model at the boundary.
 

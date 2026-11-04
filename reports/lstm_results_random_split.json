@@ -1,23 +1,25 @@
 {
-  "val_loss": 0.056612227112054825,
+  "val_loss": 0.05031546205282211,
   "best_epoch": 25,
   "test": {
-    "accuracy": 0.9793361746093245,
-    "f1": 0.9838677152651745,
-    "auc": 0.9976554572769963
+    "accuracy": 0.9807568126049335,
+    "f1": 0.9853993140617344,
+    "auc": 0.9982197659894647
   },
   "window": 10,
   "stride": 5,
   "maxlen": 10,
-  "label_mode": "majority",
+  "label_mode": "any",
   "group": [
     "proto",
     "service"
   ],
+  "split_mode": "random",
+  "shared_flows_across_splits": 54041,
   "n_windows": 51617,
   "window_label_dist": {
-    "normal": 18605,
-    "attack": 33012
+    "normal": 17574,
+    "attack": 34043
   },
   "units": 64,
   "layers": 2,
