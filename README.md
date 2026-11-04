@@ -10,6 +10,8 @@ as a target: it **audits its own evaluation for leakage**, then
 **poisons** it, **evades** it and **hardens** it, and backs every claim
 with a script or a test.
 
+📄 **Technical report (6 pages, PDF):** [Leakage, Poisoning and Evasion: Auditing a Machine-Learning Intrusion Detector on UNSW-NB15](docs/report/report.pdf) ([LaTeX source](docs/report/report.tex))
+
 > **TL;DR for reviewers**
 > * The v1 headline (RF macro-F1 **0.948**, LSTM AUC **0.998**) came from a
 >   leaky random re-split: 40% of UNSW-NB15 rows are exact duplicates,
